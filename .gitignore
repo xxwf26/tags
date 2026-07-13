@@ -30,3 +30,18 @@ bin/
 
 ### Mac OS ###
 .DS_Store
+
+### Node / 项目 ###
+node_modules/
+uploads/
+backups/
+.env
+*.log
+
+### verify（AI 打标验证脚手架的数据/产物） ###
+verify/dataset/
+verify/results/
+verify/links.txt
+verify/gold.json
+verify/gold.seed.json
+verify/report.md
