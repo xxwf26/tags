@@ -1,0 +1,11 @@
+node_modules/
+uploads/
+backups/
+verify/dataset/
+verify/results/
+verify/links.txt
+verify/gold.json
+verify/gold.seed.json
+verify/report.md
+.env
+*.log
