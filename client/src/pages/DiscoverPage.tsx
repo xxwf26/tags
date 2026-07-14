@@ -18,18 +18,22 @@ export function DiscoverPage() {
     <div className="max-w-[1600px] mx-auto px-3 md:px-6 py-3">
       <div className="bg-white rounded-2xl p-5 border border-stone-100">
         <h2 className="font-semibold text-stone-800 text-[15px] mb-1">外部采集 · 发现</h2>
-        <p className="text-xs text-stone-400 mb-3">贴小红书笔记链接 → SSR 抓取入候选队列 → 复核转正入库（自动 AI 打标）</p>
+        <p className="text-xs text-stone-400 mb-3">贴小红书笔记链接（<b>可多条，一行一个或空格分隔</b>）→ SSR 抓取入候选队列 → 复核转正入库（自动 AI 打标）</p>
         <div className="flex gap-2">
-          <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && submit()}
-            placeholder="https://www.xiaohongshu.com/explore/... 或 xhslink.com/..."
-            className="flex-1 border border-stone-200 rounded-full px-4 py-2 text-sm focus:border-xhs outline-none" />
+          <textarea value={input} onChange={e => setInput(e.target.value)} rows={3}
+            placeholder={"https://www.xiaohongshu.com/explore/...\nhttps://www.xiaohongshu.com/explore/...\n可贴多条笔记链接或整段分享文本"}
+            className="flex-1 border border-stone-200 rounded-xl px-4 py-2 text-sm focus:border-xhs outline-none resize-y" />
           <button onClick={submit} disabled={crawl.isPending}
-            className="bg-xhs text-white text-sm px-5 py-2 rounded-full font-medium disabled:opacity-50">
-            {crawl.isPending ? '采集中…' : '采集'}
+            className="bg-xhs text-white text-sm px-5 py-2 rounded-full font-medium disabled:opacity-50 self-start">
+            {crawl.isPending ? '采集中…' : '批量采集'}
           </button>
         </div>
         {crawl.isError && <div className="text-xs text-rose-500 mt-2">采集失败：{(crawl.error as Error).message}</div>}
-        {crawl.data?.dedup && <div className="text-xs text-amber-600 mt-2">该笔记已在候选队列</div>}
+        {crawl.data && (
+          <div className="text-xs text-stone-500 mt-2">
+            共 {crawl.data.total} 条链接，成功 {crawl.data.results.filter((r: any) => !r.error).length}，失败 {crawl.data.results.filter((r: any) => r.error).length}
+          </div>
+        )}
       </div>
 
       <div className="flex items-center justify-between mb-2.5 mt-4 px-1">

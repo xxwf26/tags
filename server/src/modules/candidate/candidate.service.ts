@@ -3,7 +3,7 @@ import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { db, schema } from '../../database/db.js';
 import { eq, isNotNull } from 'drizzle-orm';
-import { fetchNote, downloadImage } from '../crawl/xhs.js';
+import { fetchNote, downloadImage, extractUrls } from '../crawl/xhs.js';
 import { TaggingService } from '../tagging/tagging.service.js';
 import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
 
@@ -35,6 +35,18 @@ export class CandidateService {
     });
     const [cand] = await db.select().from(schema.candidates).where(eq(schema.candidates.id, (r as any).insertId));
     return cand;
+  }
+
+  // 批量采集：文本里提取所有小红书链接，逐条 SSR 抓取入队
+  async createFromInput(input: string) {
+    const urls = extractUrls(input);
+    if (!urls.length) return { total: 0, results: [] };
+    const results: any[] = [];
+    for (const url of urls) {
+      try { results.push(await this.createFromNote(url)); }
+      catch (e: any) { results.push({ sourceUrl: url, error: e.message }); }
+    }
+    return { total: urls.length, results };
   }
 
   async list(status = 'pending') {

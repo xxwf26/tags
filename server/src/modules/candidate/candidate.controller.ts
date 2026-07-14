@@ -5,10 +5,10 @@ import { CandidateService } from './candidate.service.js';
 export class CandidateController {
   private readonly candidateService = new CandidateService();
 
-  // 采集：POST /api/crawl/note  body: { url | text }
+  // 采集：POST /api/crawl/note  body: { url | text }，支持单条或多条链接（自动提取全部）
   @Post('crawl/note')
   crawl(@Body() body: { url?: string; text?: string }) {
-    return this.candidateService.createFromNote(body.url || body.text || '');
+    return this.candidateService.createFromInput(body.url || body.text || '');
   }
 
   // 候选队列：GET /api/candidates?status=pending

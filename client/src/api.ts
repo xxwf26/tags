@@ -76,7 +76,7 @@ export type Candidate = {
   raw: { noteId?: string; title: string; desc: string; tags: string[]; images: { url: string; width: number | null; height: number | null }[] };
   status: string; promotedArtistId: number | null; dedup?: boolean;
 };
-export async function crawlNote(input: string): Promise<Candidate> {
+export async function crawlNote(input: string): Promise<{ total: number; results: any[] }> {
   const r = await fetch(BASE + '/crawl/note', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: input }) });
   if (!r.ok) throw new Error('crawl failed');
   return r.json();
