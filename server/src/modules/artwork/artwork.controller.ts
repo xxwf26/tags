@@ -42,6 +42,7 @@ export class ArtworkController {
     const tagIds = String(body.tagIds || '').split(',').map(Number).filter(Boolean);
     return this.artworkService.create({
       artistId: body.artistId ? Number(body.artistId) : undefined,
+      artistName: body.artistName || undefined,
       title: body.title || undefined,
       width: body.width ? Number(body.width) : undefined,
       height: body.height ? Number(body.height) : undefined,

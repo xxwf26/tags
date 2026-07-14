@@ -35,6 +35,24 @@ export class ArtistService {
     return this.getOne(id);
   }
 
+  async create(body: { name: string; bio?: string; links?: any }) {
+    const [r] = await db.insert(schema.artists).values({
+      name: body.name,
+      bio: body.bio ?? null,
+      links: body.links ?? null,
+    });
+    const [a] = await db.select().from(schema.artists).where(eq(schema.artists.id, (r as any).insertId));
+    return a;
+  }
+
+  // 按名字查画师；不存在则新建（录入作品时作者可能未入库）
+  async findOrCreateByName(name: string) {
+    const all = await db.select().from(schema.artists);
+    const ex = all.find(a => (a.name || '').trim() === name.trim());
+    if (ex) return ex;
+    return this.create({ name: name.trim() });
+  }
+
   // 画风分布：按作品 genre 标签聚合 + 横竖计数 + 缺横/缺竖标记
   private async styleDistribution(artistId: number) {
     const works = await db.select().from(schema.artworks).where(eq(schema.artworks.artistId, artistId));
