@@ -78,6 +78,13 @@ export function ArtistPage() {
               <span className="text-[11px] text-stone-500 bg-stone-100 px-2 py-0.5 rounded-full">{COMMISSION[a.commission] || a.commission}</span>
             </div>
             <div className="text-[13px] text-stone-500 mt-0.5">{a.bio}</div>
+            {a.styleHint && a.styleHint.length > 0 && (
+              <div className="flex gap-1.5 flex-wrap mt-1.5">
+                {a.styleHint.map((s, i) => (
+                  <span key={i} className="text-[11px] text-xhs bg-xhs-soft px-2 py-0.5 rounded-full">{s}</span>
+                ))}
+              </div>
+            )}
             <div className="flex items-center gap-4 mt-2 text-[13px]">
               <span><b className="text-stone-800">{a.total}</b> <span className="text-stone-400">作品</span></span>
               <span><b className="text-stone-800">{a.styleDist?.length || 0}</b> <span className="text-stone-400">画风</span></span>

@@ -14,7 +14,7 @@ export type Artwork = {
 export type StyleDistItem = { style: string; count: number; h: number; v: number; both: boolean; missingOrient: string | null };
 export type Artist = {
   id: number; name: string; bio: string | null; engageStatus: string; commission: string;
-  links: any; drawingHabit: any; engageNote?: string | null;
+  links: any; drawingHabit: any; styleHint?: string[] | null; engageNote?: string | null;
   total: number; styleDist: StyleDistItem[]; styleCount?: number; topStyle?: string | null; missingStyles?: string[];
 };
 

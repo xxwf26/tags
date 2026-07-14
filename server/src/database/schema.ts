@@ -11,7 +11,8 @@ export const artists = mysqlTable('artists', {
   contact: json('contact'),                         // {wechat,qq,email}
   links: json('links'),                             // {xiaohongshu:[],weibo:[],mihuashi:[]}
   commission: mysqlEnum('commission', ['open', 'full', 'commercial_only', 'unknown']).default('unknown'),
-  drawingHabit: json('drawing_habit'),              // 见设计 §2.5
+  drawingHabit: json('drawing_habit'),
+  styleHint: json('style_hint'),                        // 画师画风提示（如 ["国风","水墨"]）              // 见设计 §2.5
   engageStatus: mysqlEnum('engage_status', ['pending', 'contacted', 'negotiating', 'cooperated', 'rejected', 'no_availability', 'unreachable']).default('pending'),
   engageNote: text('engage_note'),
   createdAt: datetime('created_at').default(sql`now()`),
