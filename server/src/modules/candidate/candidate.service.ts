@@ -9,12 +9,22 @@ import { fetchWeiboImages, extractWeiboUid } from '../crawl/weibo.js';
 import { TaggingService } from '../tagging/tagging.service.js';
 import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
 import { logOperation } from '../operation/op.js';
+import sharp from 'sharp';
 
 function deriveOrientation(w?: number | null, h?: number | null): '横' | '竖' | '方' {
   if (!w || !h) return '横';
   if (w > h * 1.1) return '横';
   if (h > w * 1.1) return '竖';
   return '方';
+}
+// 从图片 buffer 读真实宽高 → 定朝向（封面图常不带尺寸，必须读图）
+async function dimsOf(buf: Buffer): Promise<{ width: number | null; height: number | null; orientation: '横' | '竖' | '方' }> {
+  try {
+    const m = await sharp(buf).metadata();
+    return { width: m.width ?? null, height: m.height ?? null, orientation: deriveOrientation(m.width, m.height) };
+  } catch {
+    return { width: null, height: null, orientation: '横' };
+  }
 }
 function extOf(type: string): string {
   if (type.includes('png')) return 'png';
@@ -121,14 +131,15 @@ export class CandidateService {
         }
         const filename = `xhs-${raw.noteId || cand.id}-${i}.${extOf(type)}`;
         await writeFile(join(uploadsDir, filename), buf);
+        const dims = await dimsOf(buf);
         const [ar] = await db.insert(schema.artworks).values({
           artistId,
           title: raw.title || null,
           imageUrl: `/uploads/${filename}`,
           thumbUrl: `/uploads/${filename}`,
-          width: im.width || null,
-          height: im.height || null,
-          orientation: deriveOrientation(im.width, im.height),
+          width: dims.width,
+          height: dims.height,
+          orientation: dims.orientation,
           imageHash,
           sourcePlatform: 'xiaohongshu',
           sourceUrl: cand.sourceUrl,
@@ -179,11 +190,15 @@ export class CandidateService {
         if (imageHash && existingHashes.find(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipped++; continue; }
         const filename = `xhs-${it.noteId || artistId}-${artworkIds.length}.${extOf(type)}`;
         await writeFile(join(uploadsDir, filename), buf);
+        const dims = await dimsOf(buf);
         const [ar] = await db.insert(schema.artworks).values({
           artistId,
           title: it.title || null,
           imageUrl: `/uploads/${filename}`,
           thumbUrl: `/uploads/${filename}`,
+          width: dims.width,
+          height: dims.height,
+          orientation: dims.orientation,
           imageHash,
           sourcePlatform: 'xiaohongshu',
           sourceUrl: profileUrl,
@@ -229,11 +244,15 @@ export class CandidateService {
         if (imageHash && existingHashes.find(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipped++; continue; }
         const filename = `wb-${it.noteId || artistId}-${artworkIds.length}.${extOf(type)}`;
         await writeFile(join(uploadsDir, filename), buf);
+        const dims = await dimsOf(buf);
         const [ar] = await db.insert(schema.artworks).values({
           artistId,
           title: it.title || null,
           imageUrl: `/uploads/${filename}`,
           thumbUrl: `/uploads/${filename}`,
+          width: dims.width,
+          height: dims.height,
+          orientation: dims.orientation,
           imageHash,
           sourcePlatform: 'weibo',
           sourceUrl: weiboUrl,

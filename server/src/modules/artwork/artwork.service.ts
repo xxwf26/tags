@@ -5,8 +5,9 @@ import { join } from 'node:path';
 import { writeFile, mkdir, unlink } from 'node:fs/promises';
 import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
 import { logOperation } from '../operation/op.js';
+import sharp from 'sharp';
 
-function deriveOrientation(width?: number, height?: number): '横' | '竖' | '方' {
+function deriveOrientation(width?: number | null, height?: number | null): '横' | '竖' | '方' {
   if (!width || !height) return '横';
   if (width > height * 1.1) return '横';
   if (height > width * 1.1) return '竖';
@@ -80,7 +81,17 @@ export class ArtworkService {
         artistId = (r as any).insertId;
       }
     }
-    const orientation = deriveOrientation(data.width, data.height);
+    // 朝向：优先用客户端传的尺寸；没有则读图 buffer 真实尺寸
+    let width = data.width ?? null;
+    let height = data.height ?? null;
+    let orientation = deriveOrientation(width, height);
+    if (!width || !height) {
+      try {
+        const m = await sharp(data.file.buffer).metadata();
+        width = m.width ?? null; height = m.height ?? null;
+        orientation = deriveOrientation(width, height);
+      } catch {}
+    }
     const ext = data.file.originalname.split('.').pop() || 'jpg';
     const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
     const uploadsDir = join(process.cwd(), 'uploads');
@@ -105,8 +116,8 @@ export class ArtworkService {
       title: data.title || null,
       imageUrl: `/uploads/${filename}`,
       thumbUrl: `/uploads/${filename}`,
-      width: data.width || null,
-      height: data.height || null,
+      width,
+      height,
       orientation,
       imageHash,
       sourcePlatform: 'manual',
