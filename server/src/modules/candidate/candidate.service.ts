@@ -2,9 +2,10 @@
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { db, schema } from '../../database/db.js';
-import { eq } from 'drizzle-orm';
+import { eq, isNotNull } from 'drizzle-orm';
 import { fetchNote, downloadImage } from '../crawl/xhs.js';
 import { TaggingService } from '../tagging/tagging.service.js';
+import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
 
 function deriveOrientation(w?: number | null, h?: number | null): '横' | '竖' | '方' {
   if (!w || !h) return '横';
@@ -67,11 +68,22 @@ export class CandidateService {
     await mkdir(uploadsDir, { recursive: true });
     const tagging = new TaggingService();
     const artworkIds: number[] = [];
+    let skipped = 0;
 
     for (let i = 0; i < (raw.images?.length || 0); i++) {
       const im = raw.images[i];
       try {
         const { buf, type } = await downloadImage(im.url);
+        // 近重复去重：与库内已有作品比 pHash，命中则跳过
+        let imageHash: string | null = null;
+        try { imageHash = await aHash(buf); } catch {}
+        if (imageHash) {
+          const all = await db.select({ id: schema.artworks.id, hash: schema.artworks.imageHash })
+            .from(schema.artworks).where(isNotNull(schema.artworks.imageHash));
+          if (all.find(a => a.hash && hamming(imageHash!, a.hash) <= DEDUP_THRESHOLD)) {
+            skipped++; continue;
+          }
+        }
         const filename = `xhs-${raw.noteId || cand.id}-${i}.${extOf(type)}`;
         await writeFile(join(uploadsDir, filename), buf);
         const [ar] = await db.insert(schema.artworks).values({
@@ -82,6 +94,7 @@ export class CandidateService {
           width: im.width || null,
           height: im.height || null,
           orientation: deriveOrientation(im.width, im.height),
+          imageHash,
           sourcePlatform: 'xiaohongshu',
           sourceUrl: cand.sourceUrl,
           tagStatus: 'pending',
@@ -94,7 +107,7 @@ export class CandidateService {
     }
 
     await db.update(schema.candidates).set({ status: 'promoted', promotedArtistId: artistId }).where(eq(schema.candidates.id, id));
-    return { candidateId: id, artistId, artworkIds, count: artworkIds.length };
+    return { candidateId: id, artistId, artworkIds, count: artworkIds.length, skipped };
   }
 
   async reject(id: number) {

@@ -1,8 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { db, schema } from '../../database/db.js';
-import { eq, and, inArray, like } from 'drizzle-orm';
+import { eq, and, inArray, like, isNotNull } from 'drizzle-orm';
 import { join } from 'node:path';
 import { writeFile, mkdir } from 'node:fs/promises';
+import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
 
 function deriveOrientation(width?: number, height?: number): '横' | '竖' | '方' {
   if (!width || !height) return '横';
@@ -74,6 +75,19 @@ export class ArtworkService {
     await mkdir(uploadsDir, { recursive: true });
     await writeFile(join(uploadsDir, filename), data.file.buffer);
 
+    // 感知哈希 + 近重复检测
+    let imageHash: string | null = null;
+    let duplicateOf: number | null = null;
+    try {
+      imageHash = await aHash(data.file.buffer);
+      if (imageHash) {
+        const all = await db.select({ id: schema.artworks.id, hash: schema.artworks.imageHash })
+          .from(schema.artworks).where(isNotNull(schema.artworks.imageHash));
+        const dup = all.find(a => a.hash && hamming(imageHash!, a.hash) <= DEDUP_THRESHOLD);
+        if (dup) duplicateOf = dup.id;
+      }
+    } catch {}
+
     const [art] = await db.insert(schema.artworks).values({
       artistId: data.artistId || null,
       title: data.title || null,
@@ -82,6 +96,7 @@ export class ArtworkService {
       width: data.width || null,
       height: data.height || null,
       orientation,
+      imageHash,
       sourcePlatform: 'manual',
       sourceUrl: data.sourceUrl || null,
       tagStatus: 'confirmed',
@@ -92,7 +107,29 @@ export class ArtworkService {
         data.tagIds.map(tagId => ({ artworkId: artId, tagId, source: 'manual' as const, confidence: 1 }))
       );
     }
-    return this.getOne(artId);
+    const out = await this.getOne(artId);
+    return duplicateOf ? { ...out, duplicateOf } : out;
+  }
+
+  // 以图搜图：给定图 buffer，找海明距离 ≤ 阈值的作品
+  async similarByImage(buf: Buffer) {
+    const hash = await aHash(buf);
+    const all = await db.select().from(schema.artworks).where(isNotNull(schema.artworks.imageHash));
+    return all
+      .map(a => ({ ...a, distance: hamming(hash, a.imageHash!) }))
+      .filter(a => a.distance <= DEDUP_THRESHOLD * 2)
+      .sort((a, b) => a.distance - b.distance);
+  }
+  // 按已有作品 id 找相似
+  async similarById(id: number) {
+    const [me] = await db.select().from(schema.artworks).where(eq(schema.artworks.id, id));
+    if (!me?.imageHash) return [];
+    const all = await db.select().from(schema.artworks).where(isNotNull(schema.artworks.imageHash));
+    return all
+      .filter(a => a.id !== id)
+      .map(a => ({ ...a, distance: hamming(me.imageHash!, a.imageHash!) }))
+      .filter(a => a.distance <= DEDUP_THRESHOLD * 2)
+      .sort((a, b) => a.distance - b.distance);
   }
 
   private async attachTagsAndArtist(rows: any[]) {

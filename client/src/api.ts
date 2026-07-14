@@ -91,6 +91,13 @@ export async function rejectCandidate(id: number) {
   if (!r.ok) throw new Error('reject failed');
   return r.json();
 }
+export type SimilarArtwork = Artwork & { distance: number };
+export async function searchByImage(file: File): Promise<SimilarArtwork[]> {
+  const fd = new FormData(); fd.append('file', file);
+  const r = await fetch(BASE + '/artworks/similar', { method: 'POST', body: fd });
+  if (!r.ok) throw new Error('similar failed');
+  return r.json();
+}
 
 // 按顶层维度聚合标签（genre 的子维度标签收拢到 genre 下）
 export function tagsByTopDim(tree: TagNode[]) {

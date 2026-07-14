@@ -17,6 +17,19 @@ export class ArtworkController {
     return this.artworkService.getOne(id);
   }
 
+  @Get(':id/similar')
+  similarById(@Param('id', ParseIntPipe) id: number) {
+    return this.artworkService.similarById(id);
+  }
+
+  // 以图搜图：上传一张图，找相似作品（pHash 海明距离）
+  @Post('similar')
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: 30 * 1024 * 1024 } }))
+  async similarByImage(@UploadedFile() file: Express.Multer.File) {
+    if (!file) throw new Error('缺少文件 file');
+    return this.artworkService.similarByImage(file.buffer);
+  }
+
   // 手动录作品：multipart，file=图，字段 artistId/title/width/height/sourceUrl/tagIds
   @Post()
   @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: 30 * 1024 * 1024 } }))

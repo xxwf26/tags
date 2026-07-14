@@ -4,6 +4,7 @@ import { GalleryPage } from './pages/GalleryPage';
 import { ArtistPage } from './pages/ArtistPage';
 import { DiscoverPage } from './pages/DiscoverPage';
 import { EntryDialog } from './components/EntryDialog';
+import { ImageSearchDialog } from './components/ImageSearchDialog';
 import { useState } from 'react';
 
 const queryClient = new QueryClient();
@@ -12,6 +13,7 @@ function NavBar() {
   const loc = useLocation();
   const back = loc.pathname !== '/';
   const [entry, setEntry] = useState(false);
+  const [imgSearch, setImgSearch] = useState(false);
   return (
     <>
       <header className="sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-stone-100">
@@ -27,10 +29,12 @@ function NavBar() {
           <div className="flex-1 max-w-md mx-auto">
             <div className="bg-stone-100 rounded-full px-4 py-1.5 text-sm text-stone-400 flex items-center gap-2">🔍<span>搜画风 / 画师，如「油画」</span></div>
           </div>
+          <button onClick={() => setImgSearch(true)} className="text-sm text-stone-600 border border-stone-200 px-3 py-1.5 rounded-full hover:bg-stone-50">📷 以图搜图</button>
           <button onClick={() => setEntry(true)} className="text-sm bg-xhs text-white px-3.5 py-1.5 rounded-full font-medium">＋ 录作品</button>
         </div>
       </header>
       {entry && <EntryDialog onClose={() => setEntry(false)} />}
+      {imgSearch && <ImageSearchDialog onClose={() => setImgSearch(false)} />}
     </>
   );
 }
