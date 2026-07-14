@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { db, schema } from '../../database/db.js';
 import { eq, isNotNull } from 'drizzle-orm';
 import { fetchNote, downloadImage, extractUrls } from '../crawl/xhs.js';
+import { searchMihuashi } from '../crawl/mihuashi.js';
 import { TaggingService } from '../tagging/tagging.service.js';
 import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
 
@@ -47,6 +48,26 @@ export class CandidateService {
       catch (e: any) { results.push({ sourceUrl: url, error: e.message }); }
     }
     return { total: urls.length, results };
+  }
+
+  // 米画师按画风批量采集：playwright 搜指定画风标签 → 每张作品入候选队列
+  async createMihuashiBatch(tagName: string, limit = 30) {
+    const arts = await searchMihuashi(tagName, limit);
+    const results: any[] = [];
+    for (const a of arts) {
+      const sourceUrl = a.imageUrl;
+      const [existing] = await db.select().from(schema.candidates).where(eq(schema.candidates.sourceUrl, sourceUrl));
+      if (existing) { results.push({ id: existing.id, dedup: true }); continue; }
+      const [r] = await db.insert(schema.candidates).values({
+        sourcePlatform: 'mihuashi',
+        sourceUrl,
+        artistName: null,
+        raw: { title: `米画师·${tagName}`, tags: [tagName], images: [{ url: a.imageUrl, width: a.width, height: a.height }] },
+        status: 'pending',
+      });
+      results.push({ id: (r as any).insertId });
+    }
+    return { tag: tagName, total: arts.length, results };
   }
 
   async list(status = 'pending') {

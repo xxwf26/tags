@@ -96,6 +96,16 @@ export async function rejectCandidate(id: number) {
   if (!r.ok) throw new Error('reject failed');
   return r.json();
 }
+export async function crawlMihuashi(tag: string, limit = 30) {
+  const r = await fetch(BASE + '/crawl/mihuashi', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tag, limit }) });
+  if (!r.ok) throw new Error('mihuashi crawl failed');
+  return r.json();
+}
+export async function fetchMihuashiTags(): Promise<{ id: number; name: string; type: string }[]> {
+  const r = await fetch(BASE + '/mihuashi/tags');
+  if (!r.ok) throw new Error('mihuashi tags failed');
+  return r.json();
+}
 export type SimilarArtwork = Artwork & { distance: number };
 export async function searchByImage(file: File): Promise<SimilarArtwork[]> {
   const fd = new FormData(); fd.append('file', file);

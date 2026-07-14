@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchTags, fetchTagsAll, fetchArtworks, fetchArtists, fetchArtist, createArtwork, tagArtwork, tagBatch, confirmArtwork, crawlNote, fetchCandidates, promoteCandidate, rejectCandidate, searchByImage, createTag, updateTag, deleteTag, createDimension, type Artwork } from './api';
+import { fetchTags, fetchTagsAll, fetchArtworks, fetchArtists, fetchArtist, createArtwork, tagArtwork, tagBatch, confirmArtwork, crawlNote, fetchCandidates, promoteCandidate, rejectCandidate, searchByImage, createTag, updateTag, deleteTag, createDimension, crawlMihuashi, fetchMihuashiTags, type Artwork } from './api';
 
 export function useTags() {
   return useQuery({ queryKey: ['tags'], queryFn: fetchTags });
@@ -53,6 +53,14 @@ export function usePromoteCandidate() {
 export function useRejectCandidate() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (id: number) => rejectCandidate(id), onSuccess: () => qc.invalidateQueries({ queryKey: ['candidates'] }) });
+}
+export function useMihuashiTags() {
+  return useQuery({ queryKey: ['mihuashi-tags'], queryFn: fetchMihuashiTags, staleTime: 600000 });
+}
+export function useCrawlMihuashi() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: ({ tag, limit }: { tag: string; limit: number }) => crawlMihuashi(tag, limit),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['candidates'] }) });
 }
 export function useImageSearch() {
   return useMutation({ mutationFn: (file: File) => searchByImage(file) });
