@@ -181,3 +181,8 @@ export async function undoOperation(id: number) {
   if (!r.ok) throw new Error('undo failed');
   return r.json();
 }
+export async function redoOperation(id: number) {
+  const r = await fetch(BASE + '/operations/' + id + '/redo', { method: 'POST' });
+  if (!r.ok) throw new Error('redo failed');
+  return r.json();
+}

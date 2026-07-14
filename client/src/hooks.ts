@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchTags, fetchTagsAll, fetchArtworks, fetchArtists, fetchArtist, createArtwork, deleteArtwork, setArtworkTags, updateEngage, tagArtwork, tagBatch, confirmArtwork, crawlNote, fetchCandidates, promoteCandidate, rejectCandidate, searchByImage, createTag, updateTag, deleteTag, createDimension, crawlMihuashi, fetchMihuashiTags, fetchOperations, undoOperation, type Artwork, type Artist } from './api';
+import { fetchTags, fetchTagsAll, fetchArtworks, fetchArtists, fetchArtist, createArtwork, deleteArtwork, setArtworkTags, updateEngage, tagArtwork, tagBatch, confirmArtwork, crawlNote, fetchCandidates, promoteCandidate, rejectCandidate, searchByImage, createTag, updateTag, deleteTag, createDimension, crawlMihuashi, fetchMihuashiTags, fetchOperations, undoOperation, redoOperation, type Artwork, type Artist } from './api';
 
 export function useTags() {
   return useQuery({ queryKey: ['tags'], queryFn: fetchTags });
@@ -109,6 +109,13 @@ export function useUndoOperation() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: number) => undoOperation(id),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['operations'] }); qc.invalidateQueries({ queryKey: ['artworks'] }); qc.invalidateQueries({ queryKey: ['artists'] }); },
+  });
+}
+export function useRedoOperation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => redoOperation(id),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['operations'] }); qc.invalidateQueries({ queryKey: ['artworks'] }); qc.invalidateQueries({ queryKey: ['artists'] }); },
   });
 }

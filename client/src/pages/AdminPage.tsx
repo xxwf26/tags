@@ -1,9 +1,9 @@
-import { useOperations, useUndoOperation } from '../hooks';
+import { useOperations, useUndoOperation, useRedoOperation } from '../hooks';
 
 const TYPE_LABEL: Record<string, string> = {
   artwork_create: '录入作品', artwork_delete: '删除作品', artwork_confirm: '确认复核',
   artist_create: '新建画师', artist_engage: '更新建联', crawl_import: '爬取入库',
-  promote: '候选转正', undo: '撤销操作',
+  promote: '候选转正', undo: '撤销操作', redo: '重做操作',
 };
 
 function timeOf(s: string) {
@@ -14,6 +14,7 @@ function timeOf(s: string) {
 export function AdminPage() {
   const opsQ = useOperations(200);
   const undo = useUndoOperation();
+  const redo = useRedoOperation();
   const ops = opsQ.data ?? [];
 
   return (
@@ -29,6 +30,7 @@ export function AdminPage() {
           </div>
           {ops.map(op => {
             const canUndo = op.undoable && !op.undone;
+            const canRedo = op.undoable && op.undone;
             return (
               <div key={op.id} className="grid grid-cols-[auto_1fr_auto] md:grid-cols-[auto_1fr_auto_auto] gap-2 px-4 py-2.5 text-[13px] border-b border-stone-50 items-center">
                 <span className="text-stone-400 text-[12px] whitespace-nowrap">{timeOf(op.createdAt)}</span>
@@ -37,15 +39,16 @@ export function AdminPage() {
                   {op.summary}
                 </span>
                 <span className="hidden md:block text-[12px] text-stone-400">{op.targetType ? `${op.targetType}#${op.targetId ?? ''}` : ''}</span>
-                <span>
-                  {canUndo ? (
+                <span className="flex gap-1.5">
+                  {canUndo && (
                     <button onClick={() => undo.mutate(op.id)} disabled={undo.isPending}
                       className="text-[12px] text-xhs border border-xhs/30 rounded-full px-2.5 py-1 hover:bg-xhs-soft disabled:opacity-40">撤销</button>
-                  ) : op.undone ? (
-                    <span className="text-[11px] text-stone-400">已撤销</span>
-                  ) : (
-                    <span className="text-[11px] text-stone-300">—</span>
                   )}
+                  {canRedo && (
+                    <button onClick={() => redo.mutate(op.id)} disabled={redo.isPending}
+                      className="text-[12px] text-stone-500 border border-stone-300 rounded-full px-2.5 py-1 hover:bg-stone-50 disabled:opacity-40">重做</button>
+                  )}
+                  {!op.undoable && <span className="text-[11px] text-stone-300">—</span>}
                 </span>
               </div>
             );

@@ -14,4 +14,9 @@ export class OperationController {
   undo(@Param('id', ParseIntPipe) id: number) {
     return this.operationService.undo(id);
   }
+
+  @Post(':id/redo')
+  redo(@Param('id', ParseIntPipe) id: number) {
+    return this.operationService.redo(id);
+  }
 }
