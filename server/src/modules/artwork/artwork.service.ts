@@ -137,6 +137,21 @@ export class ArtworkService {
     return { id, deleted: true };
   }
 
+  // 编辑作品标签：整体替换为给定 tagIds（手动编辑，标记为 manual + confirmed）
+  async setTags(id: number, tagIds: number[]) {
+    const [row] = await db.select().from(schema.artworks).where(eq(schema.artworks.id, id));
+    if (!row) throw new Error('作品不存在');
+    await db.delete(schema.artworkTags).where(eq(schema.artworkTags.artworkId, id));
+    if (tagIds.length) {
+      await db.insert(schema.artworkTags).values(
+        tagIds.map(tagId => ({ artworkId: id, tagId, source: 'manual' as const, confidence: 1 }))
+      );
+    }
+    // 手动编辑过标签 → 视为已确认
+    await db.update(schema.artworks).set({ tagStatus: 'confirmed' }).where(eq(schema.artworks.id, id));
+    return this.getOne(id);
+  }
+
   // 以图搜图：给定图 buffer，找海明距离 ≤ 阈值的作品
   async similarByImage(buf: Buffer) {
     const hash = await aHash(buf);

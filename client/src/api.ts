@@ -69,6 +69,13 @@ export async function deleteArtwork(id: number): Promise<{ id: number; deleted: 
   if (!r.ok) throw new Error('delete failed');
   return r.json();
 }
+export async function setArtworkTags(id: number, tagIds: number[]): Promise<Artwork> {
+  const r = await fetch(BASE + '/artworks/' + id + '/tags', {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tagIds }),
+  });
+  if (!r.ok) throw new Error('set tags failed');
+  return r.json();
+}
 export async function tagArtwork(id: number) {
   const r = await fetch(BASE + '/tagging/artwork/' + id, { method: 'POST' });
   if (!r.ok) throw new Error('tag failed');

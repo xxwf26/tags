@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { useArtist, useTags, useArtworks, useTagArtwork, useConfirmArtwork, useUpdateEngage, useDeleteArtwork } from '../hooks';
+import { useArtist, useTags, useArtworks, useTagArtwork, useConfirmArtwork, useUpdateEngage, useDeleteArtwork, useSetArtworkTags } from '../hooks';
 import { FilterBar } from '../components/FilterBar';
 import { ArtworkCard } from '../components/ArtworkCard';
 import { Viewer } from '../components/Viewer';
@@ -63,13 +63,11 @@ export function ArtistPage() {
 
   const engageM = useUpdateEngage(artistId);
   const delM = useDeleteArtwork();
+  const setTagsM = useSetArtworkTags();
   const [editing, setEditing] = useState(false);
   const [editStatus, setEditStatus] = useState('');
   const [editNote, setEditNote] = useState('');
   const [adding, setAdding] = useState(false);
-  const del = (id: number, title: string | null) => {
-    if (confirm(`确认删除作品「${title || '未命名'}」？图片会一并删除，不可恢复。`)) delM.mutate(id);
-  };
 
   if (artistQ.isLoading) return <div className="text-center text-stone-400 py-16">加载中…</div>;
   if (artistQ.isError || !artistQ.data) return <div className="text-center text-rose-500 py-16">画师不存在</div>;
@@ -219,13 +217,7 @@ export function ArtistPage() {
                     <span className="text-[11px] text-stone-400">{sub.length} 张</span>
                   </div>
                   <div className="masonry columns-2 md:columns-3 lg:columns-4 xl:columns-5 2xl:columns-6">
-                    {sub.map(x => (
-                      <div key={x.id} className="relative group mb-2.5 break-inside-avoid">
-                        <ArtworkCard art={x} index={list.indexOf(x)} onOpen={setViewerIdx} />
-                        <button onClick={() => del(x.id, x.title)} disabled={delM.isPending}
-                          className="absolute top-2 right-2 z-10 w-7 h-7 rounded-full bg-black/50 text-white text-sm opacity-0 group-hover:opacity-100 transition-opacity hover:bg-rose-500" title="删除作品">🗑</button>
-                      </div>
-                    ))}
+                    {sub.map(x => <ArtworkCard key={x.id} art={x} index={list.indexOf(x)} onOpen={setViewerIdx} />)}
                   </div>
                 </div>
               );
@@ -233,13 +225,7 @@ export function ArtistPage() {
           </div>
         ) : (
           <div className="masonry columns-2 md:columns-3 lg:columns-4 xl:columns-5 2xl:columns-6">
-            {list.map((x, i) => (
-              <div key={x.id} className="relative group mb-2.5 break-inside-avoid">
-                <ArtworkCard art={x} index={i} onOpen={setViewerIdx} />
-                <button onClick={() => del(x.id, x.title)} disabled={delM.isPending}
-                  className="absolute top-2 right-2 z-10 w-7 h-7 rounded-full bg-black/50 text-white text-sm opacity-0 group-hover:opacity-100 transition-opacity hover:bg-rose-500" title="删除作品">🗑</button>
-              </div>
-            ))}
+            {list.map((x, i) => <ArtworkCard key={x.id} art={x} index={i} onOpen={setViewerIdx} />)}
           </div>
         )}
       </div>
@@ -249,7 +235,10 @@ export function ArtistPage() {
       {viewerIdx != null && (
         <Viewer list={list} index={viewerIdx} onClose={() => setViewerIdx(null)}
           onNav={d => setViewerIdx(v => (v! + d + list.length) % list.length)}
-          onTag={(id) => tagM.mutate(id)} onConfirm={(id) => confirmM.mutate(id)} tagging={tagM.isPending} />
+          onTag={(id) => tagM.mutate(id)} onConfirm={(id) => confirmM.mutate(id)} tagging={tagM.isPending}
+          onDelete={(id) => delM.mutate(id)}
+          onSaveTags={(id, tagIds) => setTagsM.mutate({ id, tagIds })} savingTags={setTagsM.isPending}
+          tagTree={tagsQ.data} />
       )}
     </div>
   );
