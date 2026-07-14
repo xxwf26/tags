@@ -25,6 +25,11 @@ export async function fetchTags(): Promise<TagNode[]> {
   if (!r.ok) throw new Error('tags failed');
   return r.json();
 }
+export async function fetchTagsAll(): Promise<TagNode[]> {
+  const r = await fetch(BASE + '/tags?all=1');
+  if (!r.ok) throw new Error('tags failed');
+  return r.json();
+}
 export async function fetchArtworks(p: { tags?: number[]; orient?: string; kw?: string; artistId?: number; sort?: string }): Promise<Artwork[]> {
   const q = new URLSearchParams();
   if (p.tags?.length) q.set('tags', p.tags.join(','));
@@ -96,6 +101,27 @@ export async function searchByImage(file: File): Promise<SimilarArtwork[]> {
   const fd = new FormData(); fd.append('file', file);
   const r = await fetch(BASE + '/artworks/similar', { method: 'POST', body: fd });
   if (!r.ok) throw new Error('similar failed');
+  return r.json();
+}
+// 标签体系配置 CRUD
+export async function createTag(body: { dimensionId: number; label: string; aliases?: string[] }) {
+  const r = await fetch(BASE + '/tags', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error('createTag failed');
+  return r.json();
+}
+export async function updateTag(id: number, body: { label?: string; aliases?: string[]; enabled?: number }) {
+  const r = await fetch(BASE + '/tags/' + id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error('updateTag failed');
+  return r.json();
+}
+export async function deleteTag(id: number) {
+  const r = await fetch(BASE + '/tags/' + id, { method: 'DELETE' });
+  if (!r.ok) throw new Error('deleteTag failed');
+  return r.json();
+}
+export async function createDimension(body: { parentId?: number | null; code: string; name: string }) {
+  const r = await fetch(BASE + '/dimensions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error('createDimension failed');
   return r.json();
 }
 

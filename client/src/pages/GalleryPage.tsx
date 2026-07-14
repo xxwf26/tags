@@ -4,13 +4,13 @@ import { FilterBar } from '../components/FilterBar';
 import { ArtworkCard } from '../components/ArtworkCard';
 import { Viewer } from '../components/Viewer';
 
-export function GalleryPage() {
+export function GalleryPage({ kw = '', setKw }: { kw?: string; setKw?: (s: string) => void }) {
   const tagsQ = useTags();
   const [orient, setOrient] = useState('全部');
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [viewerIdx, setViewerIdx] = useState<number | null>(null);
 
-  const artworksQ = useArtworks({ tags: [...selected], orient });
+  const artworksQ = useArtworks({ tags: [...selected], orient, kw });
   const tagM = useTagArtwork();
   const batchM = useTagBatch();
   const confirmM = useConfirmArtwork();
@@ -24,6 +24,10 @@ export function GalleryPage() {
 
   return (
     <div className="max-w-[1600px] mx-auto px-3 md:px-6 py-3">
+      {setKw && (
+        <input value={kw} onChange={e => setKw(e.target.value)} placeholder="🔍 搜标题 / 画风 / 画师"
+          className="md:hidden w-full mb-2.5 bg-stone-100 rounded-full px-4 py-2 text-sm outline-none" />
+      )}
       <div className="mb-2.5 sticky top-14 z-20">
         {tagsQ.data && (
           <FilterBar tree={tagsQ.data} orient={orient} setOrient={setOrient} selected={selected} toggleTag={toggleTag} onClear={clear} />

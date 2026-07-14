@@ -28,8 +28,33 @@ export function ArtistPage() {
   const [viewerIdx, setViewerIdx] = useState<number | null>(null);
 
   const artworksQ = useArtworks({ artistId, tags: [...selected], orient });
+  const allQ = useArtworks({ artistId }); // 全量作品，用于高频标签聚合
   const tagM = useTagArtwork();
   const confirmM = useConfirmArtwork();
+
+  // 按维度统计高频标签（画画习惯聚合）
+  const tagTree = tagsQ.data ?? [];
+  const dimName = new Map<number, string>();
+  const rootOf = (dimId: number, tree: any[]): number => {
+    for (const t of tree) { if (t.id === dimId) return t.id; for (const c of t.children) if (c.id === dimId) return t.id; }
+    return dimId;
+  };
+  const counts = new Map<number, number>(); // rootDimId/tagId? 用 label
+  const byRoot = new Map<string, { label: string; n: number }[]>();
+  for (const w of allQ.data ?? []) {
+    for (const tg of w.tags) {
+      const root = rootOf(tg.dimensionId, tagTree);
+      const key = `${root}`;
+      const arr = byRoot.get(key) ?? [];
+      const ex = arr.find(x => x.label === tg.label);
+      if (ex) ex.n++; else arr.push({ label: tg.label, n: 1 });
+      byRoot.set(key, arr);
+    }
+  }
+  const rootName = (rid: number) => tagTree.find(t => t.id === rid)?.name || '';
+  const habitDims = [...byRoot.entries()]
+    .map(([rid, arr]) => ({ name: rootName(Number(rid)), tags: arr.sort((a, b) => b.n - a.n).slice(0, 4) }))
+    .filter(d => d.name && d.name !== '画风');
   const toggleTag = (tid: number) => { const s = new Set(selected); s.has(tid) ? s.delete(tid) : s.add(tid); setSelected(s); };
   const clear = () => { setSelected(new Set()); setOrient('全部'); };
 
@@ -85,6 +110,25 @@ export function ArtistPage() {
           ))}
         </div>
       </div>
+
+      {/* 高频标签聚合（画画习惯，从作品统计） */}
+      {habitDims.length > 0 && (
+        <div className="bg-white rounded-2xl p-5 mt-3">
+          <h2 className="font-semibold text-stone-800 text-[15px] mb-3">高频标签 <span className="text-xs text-stone-400 font-normal">（按作品聚合的画画习惯）</span></h2>
+          <div className="space-y-2">
+            {habitDims.map(d => (
+              <div key={d.name} className="flex items-start gap-2">
+                <span className="text-[11px] text-stone-400 w-20 shrink-0 pt-1">{d.name}</span>
+                <div className="flex gap-1.5 flex-wrap">
+                  {d.tags.map(t => (
+                    <span key={t.label} className="text-[12px] text-stone-700 bg-stone-100 px-2 py-0.5 rounded-full">{t.label} <span className="text-stone-400">{t.n}</span></span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* 筛选 */}
       <div className="mt-3">

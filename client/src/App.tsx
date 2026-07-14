@@ -3,13 +3,14 @@ import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-do
 import { GalleryPage } from './pages/GalleryPage';
 import { ArtistPage } from './pages/ArtistPage';
 import { DiscoverPage } from './pages/DiscoverPage';
+import { ConfigPage } from './pages/ConfigPage';
 import { EntryDialog } from './components/EntryDialog';
 import { ImageSearchDialog } from './components/ImageSearchDialog';
 import { useState } from 'react';
 
 const queryClient = new QueryClient();
 
-function NavBar() {
+function NavBar({ kw, setKw }: { kw: string; setKw: (s: string) => void }) {
   const loc = useLocation();
   const back = loc.pathname !== '/';
   const [entry, setEntry] = useState(false);
@@ -25,9 +26,11 @@ function NavBar() {
           <nav className="flex items-center gap-1 text-sm shrink-0">
             <Link to="/" className={`px-2 md:px-2.5 py-1 rounded-full ${loc.pathname === '/' ? 'text-xhs font-medium' : 'text-stone-500'}`}>画廊</Link>
             <Link to="/discover" className={`px-2 md:px-2.5 py-1 rounded-full ${loc.pathname === '/discover' ? 'text-xhs font-medium' : 'text-stone-500'}`}>发现</Link>
+            <Link to="/config" className={`px-2 md:px-2.5 py-1 rounded-full ${loc.pathname === '/config' ? 'text-xhs font-medium' : 'text-stone-500'}`}>配置</Link>
           </nav>
           <div className="flex-1 max-w-md mx-auto hidden md:block">
-            <div className="bg-stone-100 rounded-full px-4 py-1.5 text-sm text-stone-400 flex items-center gap-2">🔍<span>搜画风 / 画师，如「油画」</span></div>
+            <input value={kw} onChange={e => setKw(e.target.value)} placeholder="🔍 搜画风 / 画师 / 标题，如「油画」"
+              className="w-full bg-stone-100 rounded-full px-4 py-1.5 text-sm outline-none focus:bg-stone-200/60" />
           </div>
           <button onClick={() => setImgSearch(true)} className="text-sm text-stone-600 border border-stone-200 px-2.5 md:px-3 py-1.5 rounded-full hover:bg-stone-50 shrink-0">📷<span className="hidden sm:inline ml-1">以图搜图</span></button>
           <button onClick={() => setEntry(true)} className="text-sm bg-xhs text-white px-3 md:px-3.5 py-1.5 rounded-full font-medium shrink-0">＋<span className="hidden sm:inline ml-0.5">录作品</span></button>
@@ -40,13 +43,15 @@ function NavBar() {
 }
 
 export default function App() {
+  const [kw, setKw] = useState('');
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
-        <NavBar />
+        <NavBar kw={kw} setKw={setKw} />
         <Routes>
-          <Route path="/" element={<GalleryPage />} />
+          <Route path="/" element={<GalleryPage kw={kw} setKw={setKw} />} />
           <Route path="/discover" element={<DiscoverPage />} />
+          <Route path="/config" element={<ConfigPage />} />
           <Route path="/artist/:id" element={<ArtistPage />} />
         </Routes>
       </BrowserRouter>

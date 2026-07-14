@@ -1,8 +1,11 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchTags, fetchArtworks, fetchArtists, fetchArtist, createArtwork, tagArtwork, tagBatch, confirmArtwork, crawlNote, fetchCandidates, promoteCandidate, rejectCandidate, searchByImage, type Artwork } from './api';
+import { fetchTags, fetchTagsAll, fetchArtworks, fetchArtists, fetchArtist, createArtwork, tagArtwork, tagBatch, confirmArtwork, crawlNote, fetchCandidates, promoteCandidate, rejectCandidate, searchByImage, createTag, updateTag, deleteTag, createDimension, type Artwork } from './api';
 
 export function useTags() {
   return useQuery({ queryKey: ['tags'], queryFn: fetchTags });
+}
+export function useTagsAll() {
+  return useQuery({ queryKey: ['tags', 'all'], queryFn: fetchTagsAll });
 }
 export function useArtworks(p: { tags?: number[]; orient?: string; kw?: string; artistId?: number; sort?: string }) {
   return useQuery({ queryKey: ['artworks', p], queryFn: () => fetchArtworks(p) });
@@ -53,4 +56,20 @@ export function useRejectCandidate() {
 }
 export function useImageSearch() {
   return useMutation({ mutationFn: (file: File) => searchByImage(file) });
+}
+export function useCreateTag() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: createTag, onSuccess: () => qc.invalidateQueries({ queryKey: ['tags'] }) });
+}
+export function useUpdateTag() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: ({ id, body }: { id: number; body: any }) => updateTag(id, body), onSuccess: () => qc.invalidateQueries({ queryKey: ['tags'] }) });
+}
+export function useDeleteTag() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (id: number) => deleteTag(id), onSuccess: () => qc.invalidateQueries({ queryKey: ['tags'] }) });
+}
+export function useCreateDimension() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: createDimension, onSuccess: () => qc.invalidateQueries({ queryKey: ['tags'] }) });
 }
