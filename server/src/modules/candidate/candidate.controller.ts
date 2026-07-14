@@ -42,7 +42,7 @@ export class CandidateController {
     return this.candidateService.reject(id);
   }
 
-  // 按画师主页爬作品：POST /api/artists/:id/crawl-works  body: { limit?, tag? }
+  // 按画师小红书主页爬作品：POST /api/artists/:id/crawl-works  body: { limit?, tag? }
   @Post('artists/:id/crawl-works')
   crawlWorks(@Param('id', ParseIntPipe) id: number, @Body() body: { limit?: number; tag?: boolean }) {
     return this.candidateService.crawlArtistWorks(id, body.limit ?? 8, body.tag ?? false);

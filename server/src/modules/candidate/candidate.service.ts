@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { db, schema } from '../../database/db.js';
 import { eq, isNotNull } from 'drizzle-orm';
 import { fetchNote, fetchProfileNotes, downloadImage, extractUrls } from '../crawl/xhs.js';
-import { fetchWeiboImages, extractWeiboUid } from '../crawl/weibo.js';
 import { searchMihuashi } from '../crawl/mihuashi.js';
+import { fetchWeiboImages, extractWeiboUid } from '../crawl/weibo.js';
 import { TaggingService } from '../tagging/tagging.service.js';
 import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
 
@@ -149,7 +149,7 @@ export class CandidateService {
     return { candidateId: id, status: 'rejected' };
   }
 
-  // 按画师小红书主页链接爬其作品封面图，下载→去重→建作品→AI打标。limit 每人最多入库张数。
+  // 按画师小红书主页链接爬其作品封面图，下载→去重→建作品→可选AI打标。limit 每人最多入库张数。
   async crawlArtistWorks(artistId: number, limit = 8, doTag = false) {
     const [artist] = await db.select().from(schema.artists).where(eq(schema.artists.id, artistId));
     if (!artist) throw new Error('画师不存在');
@@ -163,8 +163,6 @@ export class CandidateService {
     const uploadsDir = join(process.cwd(), 'uploads');
     await mkdir(uploadsDir, { recursive: true });
     const tagging = doTag ? new TaggingService() : null;
-
-    // 库内已有 hash（去重）
     const existingHashes = (await db.select({ hash: schema.artworks.imageHash })
       .from(schema.artworks).where(isNotNull(schema.artworks.imageHash))).map(a => a.hash).filter(Boolean) as string[];
 

@@ -6,9 +6,10 @@ import { eq, inArray, desc } from 'drizzle-orm';
 export class ArtistService {
   async list() {
     const artists = await db.select().from(schema.artists);
-    // 批量取每人作品封面（一次查全部作品，按画师归组，各取前 4 张）
+    // 批量取每人作品封面（一次查全部作品，按画师归组，各取前 4 张）—— 避免 N+1
     const allWorks = await db.select({
-      id: schema.artworks.id, artistId: schema.artworks.artistId, thumbUrl: schema.artworks.thumbUrl, imageUrl: schema.artworks.imageUrl,
+      id: schema.artworks.id, artistId: schema.artworks.artistId,
+      thumbUrl: schema.artworks.thumbUrl, imageUrl: schema.artworks.imageUrl,
     }).from(schema.artworks).orderBy(desc(schema.artworks.id));
     const coversByArtist = new Map<number, string[]>();
     const countByArtist = new Map<number, number>();
@@ -19,15 +20,11 @@ export class ArtistService {
       if (arr.length < 4) arr.push(w.thumbUrl || w.imageUrl);
       coversByArtist.set(w.artistId, arr);
     }
-    const out = [];
-    for (const a of artists) {
-      out.push({
-        ...a,
-        total: countByArtist.get(a.id) ?? 0,
-        coverThumbs: coversByArtist.get(a.id) ?? [],
-      });
-    }
-    return out;
+    return artists.map(a => ({
+      ...a,
+      total: countByArtist.get(a.id) ?? 0,
+      coverThumbs: coversByArtist.get(a.id) ?? [],
+    }));
   }
 
   async getOne(id: number) {

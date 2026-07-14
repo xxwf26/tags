@@ -94,6 +94,16 @@ export async function fetchNote(input: string) {
   return note;
 }
 
+export async function downloadImage(url: string): Promise<{ buf: Buffer; type: string }> {
+  // CDN 防盗链：小红书/微博需带对应 Referer
+  let extra: Record<string, string> = {};
+  if (url.includes('xhscdn.com')) extra = { Referer: 'https://www.xiaohongshu.com/' };
+  else if (url.includes('sinaimg.cn')) extra = { Referer: 'https://m.weibo.cn/' };
+  const { status, body, type } = await get(url, 0, true, extra);
+  if (status !== 200 || !body || body.length < 2000) throw new Error(`图下载失败 status ${status}`);
+  return { buf: body, type: type || 'image/jpeg' };
+}
+
 // 从主页 SSR 的 __INITIAL_STATE__ 解析画师 + 笔记列表（封面图）
 function parseProfile(html: string) {
   const i = html.indexOf('__INITIAL_STATE__');
@@ -110,7 +120,6 @@ function parseProfile(html: string) {
   const user = state?.user;
   if (!user) return null;
   let notes = user.notes;
-  // notes 常见结构：[[...]] 或 [...]（分页数组）
   if (Array.isArray(notes) && notes.length && Array.isArray(notes[0])) notes = notes.flat();
   const items = (notes || []).map((n: any) => {
     const nc = n.noteCard || n;
@@ -124,10 +133,7 @@ function parseProfile(html: string) {
       url: best?.url ? String(best.url).replace(/^http:\/\//, 'https://') : null,
     };
   }).filter((x: any) => x.url);
-  return {
-    nickname: user.userPageData?.basicInfo?.nickname || user.userInfo?.nickname || '',
-    items,
-  };
+  return { nickname: user.userPageData?.basicInfo?.nickname || user.userInfo?.nickname || '', items };
 }
 
 // 抓画师主页作品列表（封面图）。profileUrl 形如 https://www.xiaohongshu.com/user/profile/{id}
@@ -136,14 +142,4 @@ export async function fetchProfileNotes(profileUrl: string) {
   const profile = parseProfile(body);
   if (!profile) throw new Error(`主页解析失败 (status ${status})，可能链接过期或页面结构变化`);
   return profile;
-}
-
-export async function downloadImage(url: string): Promise<{ buf: Buffer; type: string }> {
-  // CDN 防盗链：小红书/微博需带对应 Referer
-  let extra: Record<string, string> = {};
-  if (url.includes('xhscdn.com')) extra = { Referer: 'https://www.xiaohongshu.com/' };
-  else if (url.includes('sinaimg.cn')) extra = { Referer: 'https://m.weibo.cn/' };
-  const { status, body, type } = await get(url, 0, true, extra);
-  if (status !== 200 || !body || body.length < 2000) throw new Error(`图下载失败 status ${status}`);
-  return { buf: body, type: type || 'image/jpeg' };
 }

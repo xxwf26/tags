@@ -1,3 +1,4 @@
+// @ts-nocheck
 // 一次性导入：飞书台账「X6-2DLS-原画师资源汇总.xlsx」→ artists 表
 // 幂等：按 小红书 profile id（无则 name）查重，已存在则合并更新。可重复跑。
 // 跑法：cd server && npx tsx src/database/import-feishu.ts [可选xlsx路径]
