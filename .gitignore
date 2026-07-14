@@ -37,6 +37,7 @@ uploads/
 backups/
 .env
 *.log
+dist/
 
 ### verify（AI 打标验证脚手架的数据/产物） ###
 verify/dataset/

@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>画风作品库 · 原型</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = { theme: { extend: { fontFamily: { sans: ['"PingFang SC"','"Microsoft YaHei"','system-ui','sans-serif'] } } } }
+</script>
+<style>
+  body{ background:#f5f5f5; color:#1c1917; }
+  .masonry{ column-gap:10px; }
+  .masonry > *{ break-inside:avoid; margin-bottom:10px; }
+  .card-hover{ transition: transform .15s ease, box-shadow .15s ease; }
+  .card-hover:hover{ transform: translateY(-2px); box-shadow:0 6px 18px -6px rgba(0,0,0,.18); }
+  .thumb-img{ transition: transform .25s ease; }
+  .card-hover:hover .thumb-img{ transform: scale(1.08); }
+  .line-clamp-2{ display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .fade{ animation:fade .2s ease; }
+  @keyframes fade{ from{opacity:0} to{opacity:1} }
+  ::-webkit-scrollbar{ width:6px;height:6px }
+  ::-webkit-scrollbar-thumb{ background:#e5e5e5;border-radius:3px }
+  .heart{ color:#FF2442; }
+  /* 悬浮放大预览 */
+  #hoverpop{ position:fixed; pointer-events:none; z-index:40; width:300px; border-radius:14px; overflow:hidden; box-shadow:0 12px 40px -8px rgba(0,0,0,.4); opacity:0; transition:opacity .12s; }
+  /* 全屏查看器 */
+  #viewer{ position:fixed; inset:0; background:rgba(0,0,0,.92); z-index:60; display:none; }
+  #viewer.show{ display:flex; }
+  .vbtn{ background:rgba(255,255,255,.1); color:#fff; border:none; width:44px; height:44px; border-radius:50%; font-size:22px; cursor:pointer; transition:background .15s; }
+  .vbtn:hover{ background:rgba(255,255,255,.22); }
+</style>
+</head>
+<body class="font-sans">
+<div id="app"></div>
+<div id="hoverpop"></div>
+<div id="viewer"></div>
+
+<script>
+/* ============ 画风白名单（两级） ============ */
+const STYLES = {
+  '国风':   { sub:'东方画风', grad:'linear-gradient(140deg,#e74c3c,#f39c12)' },
+  '水墨':   { sub:'东方画风', grad:'linear-gradient(140deg,#3b3b3b,#9ca3af)' },
+  '工笔':   { sub:'东方画风', grad:'linear-gradient(140deg,#be123c,#f9a8d4)' },
+  '浮世绘': { sub:'东方画风', grad:'linear-gradient(140deg,#3730a3,#60a5fa)' },
+  '油画':   { sub:'西方画风', grad:'linear-gradient(140deg,#92400e,#fbbf24)' },
+  '厚涂写实':{ sub:'西方画风', grad:'linear-gradient(140deg,#57534e,#a8a29e)' },
+  '欧美':   { sub:'西方画风', grad:'linear-gradient(140deg,#b45309,#fb923c)' },
+  '日系':   { sub:'二次元画风', grad:'linear-gradient(140deg,#ec4899,#7dd3fc)' },
+  '赛璐璐': { sub:'二次元画风', grad:'linear-gradient(140deg,#06b6d4,#5eead4)' },
+  '二次元': { sub:'二次元画风', grad:'linear-gradient(140deg,#c026d3,#a78bfa)' },
+  '像素':   { sub:'二次元画风', grad:'linear-gradient(140deg,#65a30d,#a3e635)' },
+  '皮影':   { sub:'民艺', grad:'linear-gradient(140deg,#c2410c,#fb923c)' },
+  '剪纸风': { sub:'民艺', grad:'linear-gradient(140deg,#dc2626,#fb7185)' },
+  '年画':   { sub:'民艺', grad:'linear-gradient(140deg,#dc2626,#fbbf24)' },
+};
+const SUB_ORDER = ['东方画风','西方画风','二次元画风','民艺'];
+const ENGAGE = {
+  cooperated:{label:'合作',cls:'text-[#FF2442] bg-[#FFF0F2]'},
+  pending:{label:'待定',cls:'text-amber-600 bg-amber-50'},
+  rejected:{label:'不合作',cls:'text-stone-400 bg-stone-100'},
+  no_availability:{label:'暂无档期',cls:'text-sky-600 bg-sky-50'},
+  unreachable:{label:'无法建联',cls:'text-stone-400 bg-stone-100'},
+  contacted:{label:'已接触',cls:'text-violet-600 bg-violet-50'},
+  negotiating:{label:'沟通中',cls:'text-violet-600 bg-violet-50'},
+};
+const COMMISSION = { open:'接稿中', full:'档期满', commercial_only:'仅商稿', unknown:'未知' };
+// 项目→朝向偏好（业务点1）
+const ORIENT_HINT = [
+  { proj:'X6', prefer:'横屏' },
+  { proj:'X3', prefer:'竖屏' },
+  { proj:'恋语', prefer:'竖屏' },
+];
+
+/* ============ 画师 mock 数据 ============ */
+const ARTISTS = [
+  { id:'yaoli', name:'尧立', aliases:['尧立插画'],
+    platform:'小红书', engage:'cooperated', commission:'open', followers:'12.3w', likes:'86.5w',
+    bio:'国风插画师 · 工笔与水墨并行 · 约稿开放',
+    habit:{ update_frequency:'月更', frequent_subjects:['人物立绘','古风场景'], active_platforms:['小红书'], active_time:'晚间更新居多', style_trend:'早期偏赛璐璐，近期转工笔', commission_signal:'主页写"约稿开放"' },
+    dist:{ '国风':8, '水墨':5, '工笔':3, '二次元':0 },
+    pool:{ subject:['人物立绘','场景'], technique:['线稿','厚涂'], usage:['插画','商稿'], tone:['低饱和','通透'], character:['成女','成男'] } },
+  { id:'nangua', name:'仿生南瓜派', aliases:[],
+    platform:'小红书', engage:'pending', commission:'unknown', followers:'8.1w', likes:'42.3w',
+    bio:'日系赛璐璐 · 原创女性角色',
+    habit:{ update_frequency:'高产', frequent_subjects:['原创女性角色','日常'], active_platforms:['小红书'], active_time:'晚间更新居多', style_trend:'稳定日系赛璐璐', commission_signal:'未注明' },
+    dist:{ '日系':7, '赛璐璐':5, '二次元':4 },
+    pool:{ subject:['人物立绘'], technique:['平涂','线稿'], usage:['头像','插画'], tone:['高饱和','治愈'], character:['成女','小孩'] } },
+  { id:'morncolour', name:'插画师MORNCOLOUR', aliases:['MORNCOLOUR'],
+    platform:'小红书', engage:'rejected', commission:'full', followers:'25.6w', likes:'180w',
+    bio:'厚涂写实场景 · 档期已满至下半年',
+    habit:{ update_frequency:'月更', frequent_subjects:['场景','氛围插画'], active_platforms:['小红书'], active_time:'不定期', style_trend:'厚涂写实为主', commission_signal:'档期已满至下半年' },
+    dist:{ '厚涂写实':9, '油画':4, '欧美':3, '水墨':0 },
+    pool:{ subject:['场景','风景'], technique:['厚涂','伪厚涂'], usage:['插画','海报'], tone:['低饱和','冷色'], character:['非人'] } },
+  { id:'ayacy', name:'阿押AYACY', aliases:['AYACY'],
+    platform:'小红书', engage:'pending', commission:'open', followers:'5.4w', likes:'31.2w',
+    bio:'古风人物 · 工笔与国风并行 · 接稿中',
+    habit:{ update_frequency:'随缘', frequent_subjects:['古风人物'], active_platforms:['小红书'], active_time:'晚间', style_trend:'工笔与国风并行', commission_signal:'主页写"接稿中"' },
+    dist:{ '国风':6, '工笔':4, '二次元':0 },
+    pool:{ subject:['人物立绘'], technique:['线稿','描线'], usage:['立绘','插画'], tone:['低饱和','通透'], character:['成女'] } },
+  { id:'jinqiao', name:'金桥', aliases:[],
+    platform:'小红书', engage:'cooperated', commission:'open', followers:'9.8w', likes:'54.1w',
+    bio:'皮影 / 民艺场景 · 约稿开放',
+    habit:{ update_frequency:'月更', frequent_subjects:['皮影','民艺场景'], active_platforms:['小红书'], active_time:'晚间', style_trend:'皮影出圈后持续民艺方向', commission_signal:'约稿开放' },
+    dist:{ '皮影':6, '剪纸风':4, '年画':3 },
+    pool:{ subject:['场景','建筑'], technique:['平涂','描线'], usage:['插画','商稿'], tone:['高饱和','暖色'], character:['非人'] } },
+  { id:'zimei', name:'子每', aliases:[],
+    platform:'小红书', engage:'cooperated', commission:'commercial_only', followers:'4.5w', likes:'22.4w',
+    bio:'国风水墨 · 仅接商稿',
+    habit:{ update_frequency:'月更', frequent_subjects:['古风人物','水墨场景'], active_platforms:['小红书'], active_time:'晚间', style_trend:'国风水墨为主', commission_signal:'仅接商稿' },
+    dist:{ '国风':5, '水墨':4, '工笔':2 },
+    pool:{ subject:['人物立绘','场景'], technique:['线稿','厚涂'], usage:['插画','商稿'], tone:['低饱和','冷色'], character:['成男','成女'] } },
+];
+
+const RATIOS = ['3/4','4/5','1/1','4/3','16/9','3/4','4/5'];
+function genWorks(a){
+  const ws=[]; let n=0;
+  for(const [style,count] of Object.entries(a.dist)){
+    if(count===0) continue;
+    for(let i=0;i<count;i++){
+      const orient = (count>=2)?(i%2===0?'横':'竖'):'横';
+      ws.push({
+        id:`${a.id}-${style}-${i}`, style, sub:STYLES[style].sub, orient,
+        ratio:RATIOS[(n+i)%RATIOS.length],
+        title:`${style} · ${a.pool.subject[i%a.pool.subject.length]} ${i+1}`,
+        subject:a.pool.subject[i%a.pool.subject.length],
+        technique:a.pool.technique[i%a.pool.technique.length],
+        usage:a.pool.usage[i%a.pool.usage.length],
+        tone:a.pool.tone[i%a.pool.tone.length],
+        character:a.pool.character[i%a.pool.character.length],
+        likes: 50 + ((n*37+i*13)%900),
+      });
+      n++;
+    }
+  }
+  return ws;
+}
+ARTISTS.forEach(a=>{ a.works=genWorks(a); a.total=a.works.length; });
+
+const $ = s=>document.querySelector(s);
+function activeStyles(a){ return Object.keys(a.dist).filter(s=>a.dist[s]>0).sort((x,y)=>a.dist[y]-a.dist[x]); }
+function missingStyles(a){ return Object.keys(a.dist).filter(s=>a.dist[s]===0); }
+function orientCount(a,style){ const w=a.works.filter(x=>x.style===style); return {h:w.filter(x=>x.orient==='横').length, v:w.filter(x=>x.orient==='竖').length}; }
+function avatarGrad(a){ const s=activeStyles(a)[0]; return STYLES[s].grad; }
+function fmt(n){ return n>=10000? (n/10000).toFixed(1)+'w' : n; }
+const DIM_LABELS = [
+  ['technique','绘制技巧（二级）'],
+  ['subject','题材'],
+  ['usage','用途'],
+  ['tone','色调/情绪'],
+  ['character','人物类型'],
+];
+
+/* ============ 筛选状态 ============ */
+let F = null; // { style, orient, tags:{dim:Set} }
+function newFilter(){ return { style:'全部', orient:'全部', tags:{ technique:new Set(), subject:new Set(), usage:new Set(), tone:new Set(), character:new Set() } }; }
+
+function filteredWorks(a){
+  return a.works.filter(w=>{
+    if(F.style!=='全部' && w.style!==F.style) return false;
+    if(F.orient!=='全部' && w.orient!==F.orient) return false;
+    for(const [dim] of DIM_LABELS){
+      const sel = F.tags[dim];
+      if(sel.size && !sel.has(w[dim])) return false;
+    }
+    return true;
+  });
+}
+// 当前画师的筛选后作品列表（供全屏翻页用）
+let curList = [];
+
+/* ============ 顶部导航 ============ */
+function navBar(back){
+  return `
+  <header class="sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-stone-100">
+    <div class="max-w-6xl mx-auto px-4 h-14 flex items-center gap-3">
+      ${back?`<a href="#/" class="text-stone-500 text-xl w-8">‹</a>`:``}
+      <div class="flex items-center gap-1.5 font-bold text-[#FF2442] text-lg">
+        <span class="bg-[#FF2442] text-white w-7 h-7 rounded-lg flex items-center justify-center text-sm">画</span>画风库
+      </div>
+      <div class="flex-1 max-w-md mx-auto">
+        <div class="bg-stone-100 rounded-full px-4 py-1.5 text-sm text-stone-400 flex items-center gap-2">🔍<span>搜画风 / 画师，如「油画」</span></div>
+      </div>
+      <div class="text-xs text-stone-400 border border-stone-200 rounded-full px-3 py-1">原型</div>
+    </div>
+  </header>`;
+}
+
+/* ============ 作品卡 ============ */
+function workCard(w, a, idx){
+  return `
+  <div class="bg-white rounded-xl overflow-hidden card-hover cursor-pointer fade" onclick="openViewer(${idx})" onmouseenter="hoverPop(${idx})" onmouseleave="hoverPop(-1)">
+    <div class="relative overflow-hidden" style="aspect-ratio:${w.ratio}">
+      <div class="thumb-img absolute inset-0" style="background:${STYLES[w.style].grad}"></div>
+      <span class="absolute top-2 left-2 text-[10px] px-1.5 py-0.5 rounded bg-black/35 text-white backdrop-blur z-10">${w.orient}屏</span>
+      <span class="absolute top-2 right-2 text-[10px] px-1.5 py-0.5 rounded bg-white/30 text-white backdrop-blur z-10">${w.style}</span>
+      <button onclick="event.stopPropagation();openViewer(${idx})" class="absolute bottom-2 right-2 z-10 w-7 h-7 rounded-full bg-black/45 text-white text-xs flex items-center justify-center hover:bg-[#FF2442]">⤢</button>
+    </div>
+    <div class="p-2.5">
+      <div class="text-[13px] text-stone-800 line-clamp-2 leading-snug">${w.title}</div>
+      <div class="flex items-center justify-between mt-2">
+        <div class="flex gap-1 flex-wrap">
+          <span class="text-[10px] text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded">${w.technique}</span>
+          <span class="text-[10px] text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded">${w.subject}</span>
+        </div>
+        <div class="flex items-center gap-0.5 text-[11px] text-stone-400 shrink-0"><span class="heart">♥</span>${fmt(w.likes)}</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ============ 列表页 ============ */
+function renderList(){
+  const cards = ARTISTS.map(a=>{
+    const top = activeStyles(a)[0]; const rep = a.works[0]; const e = ENGAGE[a.engage];
+    const chips = activeStyles(a).slice(0,3).map(s=>`<span class="text-[11px] text-stone-500 bg-stone-100 px-2 py-0.5 rounded-full">${s} ${a.dist[s]}</span>`).join('');
+    return `
+    <div class="bg-white rounded-xl overflow-hidden card-hover cursor-pointer fade" onclick="location.hash='#/artist/${a.id}'">
+      <div class="relative w-full" style="aspect-ratio:${rep.ratio}; background:${STYLES[top].grad}">
+        <span class="absolute top-2 left-2 text-[10px] px-2 py-0.5 rounded-full ${e.cls}">${e.label}</span>
+        <div class="absolute bottom-0 left-0 right-0 p-2.5 bg-gradient-to-t from-black/55 to-transparent">
+          <div class="text-white font-semibold text-sm drop-shadow">${a.name}</div>
+          <div class="text-white/80 text-[11px] drop-shadow">${a.bio}</div>
+        </div>
+      </div>
+      <div class="p-2.5">
+        <div class="flex items-center justify-between text-[11px] text-stone-400 mb-1.5"><span>共 ${a.total} 张 · ${activeStyles(a).length} 种画风</span><span>❤ ${a.likes}</span></div>
+        <div class="flex gap-1 flex-wrap">${chips}</div>
+      </div>
+    </div>`;
+  }).join('');
+  $('#app').innerHTML = `
+  ${navBar(false)}
+  <div class="max-w-6xl mx-auto px-4 py-4">
+    <div class="flex gap-2 mb-4 overflow-x-auto pb-1">
+      <span class="shrink-0 text-[13px] px-3.5 py-1.5 rounded-full bg-[#FF2442] text-white font-medium">全部</span>
+      ${SUB_ORDER.map(s=>`<span class="shrink-0 text-[13px] px-3.5 py-1.5 rounded-full bg-white text-stone-600 border border-stone-200">${s}</span>`).join('')}
+    </div>
+    <div class="masonry columns-2 md:columns-3 lg:columns-4">${cards}</div>
+  </div>`;
+}
+
+/* ============ 详情页 ============ */
+let curArtist = null;
+function renderDetail(id){
+  const a = ARTISTS.find(x=>x.id===id);
+  if(!a){ renderList(); return; }
+  curArtist = a;
+  F = newFilter();
+  $('#app').innerHTML = navBar(true) + `<div id="detailRoot" class="max-w-6xl mx-auto px-4 py-4 fade"></div>`;
+  renderDetailBody();
+  window.scrollTo(0,0);
+}
+
+function renderDetailBody(){
+  const a = curArtist;
+  const e = ENGAGE[a.engage];
+  const styles = activeStyles(a);
+  const missing = missingStyles(a);
+  const total = a.total;
+  const bar = styles.map(s=>{
+    const pct=(a.dist[s]/total*100).toFixed(1);
+    return `<div class="h-full flex items-center justify-center text-[10px] text-white/95 font-medium" style="width:${pct}%;background:${STYLES[s].grad}">${pct>10?s:''}</div>`;
+  }).join('');
+
+  // 多维标签筛选区：每个维度取该画师作品里出现过的去重值
+  const dimFilters = DIM_LABELS.map(([dim,label])=>{
+    const vals = [...new Set(a.works.map(w=>w[dim]))];
+    const chips = vals.map(v=>{
+      const on = F.tags[dim].has(v);
+      return `<span class="text-[12px] px-2.5 py-1 rounded-full cursor-pointer border ${on?'bg-[#FF2442] text-white border-[#FF2442]':'bg-white text-stone-600 border-stone-200 hover:border-stone-400'}" onclick="toggleTag('${dim}','${v}')">${v}</span>`;
+    }).join('');
+    return `<div class="flex items-start gap-2">
+      <span class="text-[11px] text-stone-400 w-24 shrink-0 pt-1">${label}</span>
+      <div class="flex gap-1.5 flex-wrap">${chips}</div>
+    </div>`;
+  }).join('');
+
+  // 画风筛选 chips（一级）
+  const styleChips = [
+    `<span class="shrink-0 text-[13px] px-3.5 py-1.5 rounded-full cursor-pointer ${F.style==='全部'?'bg-[#FF2442] text-white font-medium':'bg-white text-stone-600 border border-stone-200'}" onclick="setStyle('全部')">全部 ${total}</span>`,
+    ...styles.map(s=>`<span class="shrink-0 text-[13px] px-3.5 py-1.5 rounded-full cursor-pointer ${F.style===s?'bg-[#FF2442] text-white font-medium':'bg-white text-stone-600 border border-stone-200'}" onclick="setStyle('${s}')">${s} ${a.dist[s]}</span>`),
+    ...missing.map(s=>`<span class="shrink-0 text-[13px] px-3.5 py-1.5 rounded-full bg-stone-50 text-stone-300 border border-dashed border-stone-300">${s} 待补</span>`),
+  ].join('');
+
+  // 朝向筛选 + 项目提示
+  const orientChips = ['全部','横屏','竖屏'].map(o=>{
+    const val = o==='全部'?'全部':o[0];
+    return `<span class="text-[13px] px-3.5 py-1.5 rounded-full cursor-pointer ${F.orient===val?'bg-[#FF2442] text-white font-medium':'bg-white text-stone-600 border border-stone-200'}" onclick="setOrient('${val}')">${o}</span>`;
+  }).join('');
+  const hint = ORIENT_HINT.map(h=>`<span class="text-[11px] text-stone-400">${h.proj}→${h.prefer}</span>`).join(' · ');
+
+  $('#detailRoot').innerHTML = `
+    <!-- 头部 -->
+    <div class="bg-white rounded-2xl p-5">
+      <div class="flex items-start gap-4">
+        <div class="w-16 h-16 rounded-full shrink-0 flex items-center justify-center text-white text-2xl font-bold" style="background:${avatarGrad(a)}">${a.name.slice(0,1)}</div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 flex-wrap">
+            <h1 class="text-lg font-bold text-stone-800">${a.name}</h1>
+            <span class="text-[11px] px-2 py-0.5 rounded-full ${e.cls}">${e.label}</span>
+          </div>
+          <div class="text-[13px] text-stone-500 mt-0.5">${a.bio}</div>
+          <div class="flex items-center gap-4 mt-2 text-[13px]">
+            <span><b class="text-stone-800">${a.total}</b> <span class="text-stone-400">作品</span></span>
+            <span><b class="text-stone-800">${styles.length}</b> <span class="text-stone-400">画风</span></span>
+            <span><b class="text-stone-800">${a.followers}</b> <span class="text-stone-400">粉丝</span></span>
+            <span><b class="text-stone-800">${a.likes}</b> <span class="text-stone-400">获赞</span></span>
+          </div>
+        </div>
+        <div class="flex flex-col gap-2">
+          <button class="bg-[#FF2442] text-white text-sm px-4 py-1.5 rounded-full font-medium">关注 / 建联</button>
+          <button class="bg-stone-100 text-stone-600 text-xs px-4 py-1 rounded-full">${COMMISSION[a.commission]}</button>
+        </div>
+      </div>
+      <div class="flex gap-1.5 flex-wrap mt-4">
+        ${['更新频率 '+a.habit.update_frequency, a.habit.active_time, a.habit.style_trend, a.habit.commission_signal].map(t=>`<span class="text-[11px] text-stone-500 bg-stone-50 px-2 py-1 rounded">${t}</span>`).join('')}
+      </div>
+    </div>
+
+    <!-- 画风分布 -->
+    <div class="bg-white rounded-2xl p-5 mt-3">
+      <h2 class="font-semibold text-stone-800 text-[15px] mb-3">画风分布 <span class="text-xs text-stone-400 font-normal">（一级筛选 · 点图例筛选）</span></h2>
+      <div class="h-7 rounded-full overflow-hidden flex">${bar}</div>
+      <div class="flex gap-3 mt-3 flex-wrap">
+        ${styles.map(s=>{
+          const pct=(a.dist[s]/total*100).toFixed(0); const oc=orientCount(a,s); const both=oc.h>0&&oc.v>0;
+          return `<button onclick="setStyle('${s}')" class="flex items-center gap-1.5 text-[13px] hover:bg-stone-50 rounded-lg px-2 py-1">
+            <span class="w-3 h-3 rounded-sm" style="background:${STYLES[s].grad}"></span>
+            <span class="text-stone-700">${s}</span><span class="text-stone-400">${a.dist[s]} · ${pct}%</span>
+            ${both?'':`<span class="text-[10px] text-[#FF2442]">缺${oc.h?'竖':'横'}屏</span>`}
+          </button>`;
+        }).join('')}
+      </div>
+    </div>
+
+    <!-- 多维标签筛选区（业务点2、3） -->
+    <div class="bg-white rounded-2xl p-5 mt-3">
+      <h2 class="font-semibold text-stone-800 text-[15px] mb-3">标签筛选 <span class="text-xs text-stone-400 font-normal">（前期筛选直接用，多选叠加 · 跨维度「与」、同维度「或」）</span></h2>
+      <div class="space-y-2.5">${dimFilters}</div>
+      ${(Object.values(F.tags).some(s=>s.size)) ? `<button onclick="clearTags()" class="text-[12px] text-[#FF2442] mt-2">清除标签筛选</button>` : ''}
+    </div>
+
+    <!-- 画风 + 朝向 筛选条 -->
+    <div class="mt-4 sticky top-14 bg-[#f5f5f5] z-10 -mx-4 px-4 py-2 border-b border-stone-200">
+      <div class="flex gap-2 overflow-x-auto pb-1">${styleChips}</div>
+      <div class="flex items-center gap-2 mt-1.5 flex-wrap">
+        ${orientChips}
+        <span class="text-[11px] text-stone-400">| 项目偏好：${hint}</span>
+      </div>
+    </div>
+
+    <!-- 作品区（横/竖归类，业务点1） -->
+    <div id="worksArea" class="mt-3"></div>
+  `;
+  renderWorks();
+}
+
+function renderWorks(){
+  const a = curArtist;
+  const ws = filteredWorks(a);
+  curList = ws;
+  const root = $('#worksArea');
+  if(!ws.length){ root.innerHTML = `<div class="text-center text-stone-400 text-sm py-16">当前筛选无作品</div>`; return; }
+
+  // 按朝向归类（业务点1）：全部时两组，指定朝向时一组
+  const groups = F.orient==='全部'
+    ? [['横','横屏'], ['竖','竖屏']]
+    : [[F.orient, F.orient+'屏']];
+
+  root.innerHTML = groups.map(([o,label])=>{
+    const sub = ws.filter(w=>w.orient===o);
+    if(!sub.length) return '';
+    // 计算每张在 curList 中的全局 index（供全屏翻页）
+    const cards = sub.map(w=>{
+      const idx = curList.indexOf(w);
+      return workCard(w, a, idx);
+    }).join('');
+    return `
+      <div class="mb-6 fade">
+        <div class="flex items-center gap-2 mb-2.5">
+          <h3 class="font-semibold text-stone-700 text-[14px]">${label}</h3>
+          <span class="text-xs text-stone-400">${sub.length} 张</span>
+          <span class="text-[11px] text-stone-400">${ORIENT_HINT.filter(h=>h.prefer===label).map(h=>h.proj).join('、')}</span>
+        </div>
+        <div class="masonry columns-2 md:columns-3 lg:columns-4">${cards}</div>
+      </div>`;
+  }).join('') || `<div class="text-center text-stone-400 text-sm py-16">当前朝向无作品</div>`;
+}
+
+/* ============ 筛选交互 ============ */
+function setStyle(s){ F.style=s; renderDetailBody(); }
+function setOrient(o){ F.orient=o; renderDetailBody(); }
+function toggleTag(dim,v){ const s=F.tags[dim]; s.has(v)?s.delete(v):s.add(v); renderDetailBody(); }
+function clearTags(){ F.tags=DIM_LABELS.reduce((m,[d])=>(m[d]=new Set(),m),{}); renderDetailBody(); }
+
+/* ============ 悬浮放大（业务点4-a） ============ */
+function hoverPop(idx){
+  const pop = $('#hoverpop');
+  if(idx<0){ pop.style.opacity=0; return; }
+  const w = curList[idx]; if(!w){ pop.style.opacity=0; return; }
+  pop.innerHTML = `
+    <div style="aspect-ratio:${w.ratio}; background:${STYLES[w.style].grad}"></div>
+    <div class="bg-white p-2.5">
+      <div class="text-[13px] text-stone-800 font-medium">${w.title}</div>
+      <div class="text-[11px] text-stone-500 mt-0.5">${w.style} · ${w.technique} · ${w.subject} · ${w.orient}屏</div>
+    </div>`;
+  pop.style.opacity = 1;
+  // 定位：跟随鼠标右侧
+  const x = window.event?.clientX || 100, y = window.event?.clientY || 100;
+  const px = Math.min(x + 16, window.innerWidth - 320);
+  const py = Math.max(8, Math.min(y - 40, window.innerHeight - 360));
+  pop.style.left = px + 'px'; pop.style.top = py + 'px';
+}
+
+/* ============ 全屏查看器（业务点4-b + 左右键翻图，限筛选范围） ============ */
+let vIdx = 0;
+function openViewer(idx){ vIdx = idx; renderViewer(); }
+function renderViewer(){
+  if(!curList.length) return;
+  vIdx = (vIdx + curList.length) % curList.length;
+  const w = curList[vIdx]; const a = curArtist;
+  $('#viewer').classList.add('show');
+  $('#viewer').innerHTML = `
+    <div class="flex items-center justify-between px-6 pt-5 text-white/80 text-sm">
+      <span>${a.name} · ${w.style}</span>
+      <span>${vIdx+1} / ${curList.length} · ←/→ 翻图 · ESC 关闭</span>
+    </div>
+    <div class="flex-1 flex items-center justify-center gap-4 px-6 pb-6 min-h-0">
+      <button class="vbtn shrink-0" onclick="navViewer(-1)">‹</button>
+      <div class="flex gap-5 max-w-5xl w-full items-center">
+        <div class="rounded-xl overflow-hidden shadow-2xl shrink-0" style="width:min(58%,520px); aspect-ratio:${w.ratio}; background:${STYLES[w.style].grad}">
+          <div class="h-full flex flex-col justify-end p-5">
+            <div class="text-white text-lg font-semibold drop-shadow">${w.style} · ${w.subject}</div>
+            <div class="text-white/80 text-sm drop-shadow">${w.title} · ${w.orient}屏</div>
+          </div>
+        </div>
+        <div class="text-white flex-1 min-w-0">
+          <div class="text-[11px] text-white/40 mb-2">多维标签（白名单）</div>
+          <div class="space-y-2.5 text-sm">
+            ${[['画风',[`${STYLES[w.style].sub} · ${w.style}`]],['技法',[w.technique]],['题材',[w.subject]],['用途',[w.usage]],['色调',[w.tone]],['人物',[w.character]]].map(([k,vs])=>`
+              <div class="flex items-start gap-2"><span class="text-white/40 w-16 shrink-0 text-[12px]">${k}</span><div class="flex gap-1.5 flex-wrap">${vs.map(v=>`<span class="text-[12px] text-[#FF2442] bg-[#FFF0F2] px-2 py-0.5 rounded-full">${v}</span>`).join('')}</div></div>`).join('')}
+          </div>
+          <div class="flex items-center gap-4 mt-5 pt-4 border-t border-white/10 text-[13px] text-white/50"><span class="heart">♥</span><span>${fmt(w.likes)}</span><span>来源：${a.platform}</span></div>
+        </div>
+      </div>
+      <button class="vbtn shrink-0" onclick="navViewer(1)">›</button>
+    </div>`;
+}
+function navViewer(d){ vIdx += d; renderViewer(); }
+function closeViewer(){ $('#viewer').classList.remove('show'); }
+$('#viewer')?.addEventListener('click', e=>{ if(e.target.id==='viewer') closeViewer(); });
+document.addEventListener('keydown', e=>{
+  if(!$('#viewer').classList.contains('show')) return;
+  if(e.key==='ArrowLeft') navViewer(-1);
+  else if(e.key==='ArrowRight') navViewer(1);
+  else if(e.key==='Escape') closeViewer();
+});
+
+/* ============ 路由 ============ */
+function route(){
+  const h=location.hash.replace(/^#/,'');
+  const m=h.match(/^\/artist\/(.+)$/);
+  if(m) renderDetail(m[1]); else renderList();
+}
+window.addEventListener('hashchange',route);
+window.addEventListener('DOMContentLoaded',route);
+</script>
+</body>
+</html>
