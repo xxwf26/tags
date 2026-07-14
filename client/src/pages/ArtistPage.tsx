@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { useArtist, useTags, useArtworks, useTagArtwork, useConfirmArtwork, useUpdateEngage } from '../hooks';
+import { useArtist, useTags, useArtworks, useTagArtwork, useConfirmArtwork, useUpdateEngage, useDeleteArtwork } from '../hooks';
 import { FilterBar } from '../components/FilterBar';
 import { ArtworkCard } from '../components/ArtworkCard';
 import { Viewer } from '../components/Viewer';
+import { EntryDialog } from '../components/EntryDialog';
 
 const ENGAGE: Record<string, string> = {
   cooperated: '合作', pending: '待定', rejected: '不合作',
@@ -61,9 +62,14 @@ export function ArtistPage() {
   const clear = () => { setSelected(new Set()); setOrient('全部'); };
 
   const engageM = useUpdateEngage(artistId);
+  const delM = useDeleteArtwork();
   const [editing, setEditing] = useState(false);
   const [editStatus, setEditStatus] = useState('');
   const [editNote, setEditNote] = useState('');
+  const [adding, setAdding] = useState(false);
+  const del = (id: number, title: string | null) => {
+    if (confirm(`确认删除作品「${title || '未命名'}」？图片会一并删除，不可恢复。`)) delM.mutate(id);
+  };
 
   if (artistQ.isLoading) return <div className="text-center text-stone-400 py-16">加载中…</div>;
   if (artistQ.isError || !artistQ.data) return <div className="text-center text-rose-500 py-16">画师不存在</div>;
@@ -195,7 +201,10 @@ export function ArtistPage() {
 
       {/* 作品 */}
       <div className="mt-3">
-        <div className="text-[13px] text-stone-500 mb-2 px-1">作品 <b className="text-stone-700">{list.length}</b> 张</div>
+        <div className="flex items-center justify-between mb-2 px-1">
+          <span className="text-[13px] text-stone-500">作品 <b className="text-stone-700">{list.length}</b> 张</span>
+          <button onClick={() => setAdding(true)} className="text-[12px] bg-xhs text-white px-3 py-1 rounded-full font-medium">＋ 加作品</button>
+        </div>
         {list.length === 0 ? (
           <div className="text-center text-stone-400 py-16">该画师暂无符合筛选条件的作品</div>
         ) : orient === '全部' ? (
@@ -210,7 +219,13 @@ export function ArtistPage() {
                     <span className="text-[11px] text-stone-400">{sub.length} 张</span>
                   </div>
                   <div className="masonry columns-2 md:columns-3 lg:columns-4 xl:columns-5 2xl:columns-6">
-                    {sub.map(x => <ArtworkCard key={x.id} art={x} index={list.indexOf(x)} onOpen={setViewerIdx} />)}
+                    {sub.map(x => (
+                      <div key={x.id} className="relative group mb-2.5 break-inside-avoid">
+                        <ArtworkCard art={x} index={list.indexOf(x)} onOpen={setViewerIdx} />
+                        <button onClick={() => del(x.id, x.title)} disabled={delM.isPending}
+                          className="absolute top-2 right-2 z-10 w-7 h-7 rounded-full bg-black/50 text-white text-sm opacity-0 group-hover:opacity-100 transition-opacity hover:bg-rose-500" title="删除作品">🗑</button>
+                      </div>
+                    ))}
                   </div>
                 </div>
               );
@@ -218,10 +233,18 @@ export function ArtistPage() {
           </div>
         ) : (
           <div className="masonry columns-2 md:columns-3 lg:columns-4 xl:columns-5 2xl:columns-6">
-            {list.map((x, i) => <ArtworkCard key={x.id} art={x} index={i} onOpen={setViewerIdx} />)}
+            {list.map((x, i) => (
+              <div key={x.id} className="relative group mb-2.5 break-inside-avoid">
+                <ArtworkCard art={x} index={i} onOpen={setViewerIdx} />
+                <button onClick={() => del(x.id, x.title)} disabled={delM.isPending}
+                  className="absolute top-2 right-2 z-10 w-7 h-7 rounded-full bg-black/50 text-white text-sm opacity-0 group-hover:opacity-100 transition-opacity hover:bg-rose-500" title="删除作品">🗑</button>
+              </div>
+            ))}
           </div>
         )}
       </div>
+
+      {adding && <EntryDialog onClose={() => setAdding(false)} presetArtistId={artistId} />}
 
       {viewerIdx != null && (
         <Viewer list={list} index={viewerIdx} onClose={() => setViewerIdx(null)}

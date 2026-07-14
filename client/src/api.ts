@@ -64,6 +64,11 @@ export async function createArtwork(fd: FormData): Promise<Artwork> {
   if (!r.ok) throw new Error('create failed');
   return r.json();
 }
+export async function deleteArtwork(id: number): Promise<{ id: number; deleted: boolean }> {
+  const r = await fetch(BASE + '/artworks/' + id, { method: 'DELETE' });
+  if (!r.ok) throw new Error('delete failed');
+  return r.json();
+}
 export async function tagArtwork(id: number) {
   const r = await fetch(BASE + '/tagging/artwork/' + id, { method: 'POST' });
   if (!r.ok) throw new Error('tag failed');

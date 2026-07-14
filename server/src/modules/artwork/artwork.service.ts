@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { db, schema } from '../../database/db.js';
 import { eq, and, inArray, like, isNotNull } from 'drizzle-orm';
 import { join } from 'node:path';
-import { writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir, unlink } from 'node:fs/promises';
 import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
 
 function deriveOrientation(width?: number, height?: number): '横' | '竖' | '方' {
@@ -109,6 +109,21 @@ export class ArtworkService {
     }
     const out = await this.getOne(artId);
     return duplicateOf ? { ...out, duplicateOf } : out;
+  }
+
+  // 硬删作品：删关联标签 + 删记录 + 删 uploads 图文件
+  async remove(id: number) {
+    const [row] = await db.select().from(schema.artworks).where(eq(schema.artworks.id, id));
+    if (!row) throw new Error('作品不存在');
+    await db.delete(schema.artworkTags).where(eq(schema.artworkTags.artworkId, id));
+    await db.delete(schema.artworks).where(eq(schema.artworks.id, id));
+    // 删本地图文件（仅删 /uploads 下的、非外链）
+    for (const p of [row.imageUrl, row.thumbUrl]) {
+      if (p && p.startsWith('/uploads/')) {
+        try { await unlink(join(process.cwd(), p.replace(/^\//, ''))); } catch {}
+      }
+    }
+    return { id, deleted: true };
   }
 
   // 以图搜图：给定图 buffer，找海明距离 ≤ 阈值的作品

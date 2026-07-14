@@ -11,12 +11,12 @@ const DIM_ROWS = [
   { code: 'character', label: '人物类型' },
 ];
 
-export function EntryDialog({ onClose }: { onClose: () => void }) {
+export function EntryDialog({ onClose, presetArtistId }: { onClose: () => void; presetArtistId?: number }) {
   const tagsQ = useTags();
   const artistsQ = useArtists();
   const create = useCreateArtwork();
 
-  const [artistId, setArtistId] = useState('');
+  const [artistId, setArtistId] = useState(presetArtistId ? String(presetArtistId) : '');
   const [title, setTitle] = useState('');
   const [sourceUrl, setSourceUrl] = useState('');
   const [file, setFile] = useState<File | null>(null);
@@ -88,7 +88,8 @@ export function EntryDialog({ onClose }: { onClose: () => void }) {
         <div className="space-y-3 text-sm">
           <div>
             <label className="text-xs text-stone-400">画师</label>
-            <select value={artistId} onChange={e => setArtistId(e.target.value)} className="w-full mt-1 border border-stone-200 rounded-lg px-3 py-2">
+            <select value={artistId} onChange={e => setArtistId(e.target.value)} disabled={!!presetArtistId}
+              className="w-full mt-1 border border-stone-200 rounded-lg px-3 py-2 disabled:bg-stone-100 disabled:text-stone-500">
               <option value="">（不选）</option>
               {artistsQ.data?.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
             </select>
