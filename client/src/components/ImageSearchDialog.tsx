@@ -28,7 +28,7 @@ export function ImageSearchDialog({ onClose }: { onClose: () => void }) {
   const doSearch = () => { if (file) search.mutate(file); };
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-start justify-center p-6 overflow-auto" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-start justify-center p-3 md:p-6 overflow-auto" onClick={onClose}>
       <div className="bg-white rounded-2xl max-w-3xl w-full p-5 my-8" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h2 className="font-semibold text-stone-800 text-lg">📷 以图搜图</h2>

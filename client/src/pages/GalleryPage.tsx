@@ -23,7 +23,7 @@ export function GalleryPage() {
   const list = artworksQ.data ?? [];
 
   return (
-    <div className="max-w-[1600px] mx-auto px-6 py-3">
+    <div className="max-w-[1600px] mx-auto px-3 md:px-6 py-3">
       <div className="mb-2.5 sticky top-14 z-20">
         {tagsQ.data && (
           <FilterBar tree={tagsQ.data} orient={orient} setOrient={setOrient} selected={selected} toggleTag={toggleTag} onClear={clear} />

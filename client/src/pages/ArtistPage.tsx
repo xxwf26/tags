@@ -41,7 +41,7 @@ export function ArtistPage() {
   const habit = a.drawingHabit || {};
 
   return (
-    <div className="max-w-[1600px] mx-auto px-6 py-3">
+    <div className="max-w-[1600px] mx-auto px-3 md:px-6 py-3">
       {/* 头部 */}
       <div className="bg-white rounded-2xl p-5">
         <div className="flex items-start gap-4">

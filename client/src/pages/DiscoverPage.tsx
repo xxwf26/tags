@@ -15,7 +15,7 @@ export function DiscoverPage() {
   const getChoice = (id: number) => choice[id] ?? { artistId: '', newArtist: true };
 
   return (
-    <div className="max-w-[1600px] mx-auto px-6 py-3">
+    <div className="max-w-[1600px] mx-auto px-3 md:px-6 py-3">
       <div className="bg-white rounded-2xl p-5 border border-stone-100">
         <h2 className="font-semibold text-stone-800 text-[15px] mb-1">外部采集 · 发现</h2>
         <p className="text-xs text-stone-400 mb-3">贴小红书笔记链接 → SSR 抓取入候选队列 → 复核转正入库（自动 AI 打标）</p>
