@@ -8,6 +8,7 @@ import { searchMihuashi } from '../crawl/mihuashi.js';
 import { fetchWeiboImages, extractWeiboUid } from '../crawl/weibo.js';
 import { TaggingService } from '../tagging/tagging.service.js';
 import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
+import { logOperation } from '../operation/op.js';
 
 function deriveOrientation(w?: number | null, h?: number | null): '横' | '竖' | '方' {
   if (!w || !h) return '横';
@@ -141,6 +142,7 @@ export class CandidateService {
     }
 
     await db.update(schema.candidates).set({ status: 'promoted', promotedArtistId: artistId }).where(eq(schema.candidates.id, id));
+    await logOperation({ type: 'promote', targetType: 'candidate', targetId: id, summary: `转正候选 #${id}（${artworkIds.length} 张作品）` });
     return { candidateId: id, artistId, artworkIds, count: artworkIds.length, skipped };
   }
 
@@ -193,6 +195,7 @@ export class CandidateService {
         if (tagging) { try { await tagging.tagArtwork(aid); } catch {} }
       } catch { failed++; }
     }
+    await logOperation({ type: 'crawl_import', targetType: 'artwork', targetId: artistId, summary: `主页爬取「${profile.nickname}」导入 ${artworkIds.length} 张` });
     return { artistId, nickname: profile.nickname, found: profile.items.length, imported: artworkIds.length, skipped, failed, artworkIds };
   }
 
@@ -242,6 +245,7 @@ export class CandidateService {
         if (tagging) { try { await tagging.tagArtwork(aid); } catch {} }
       } catch { failed++; }
     }
+    await logOperation({ type: 'crawl_import', targetType: 'artwork', targetId: artistId, summary: `微博爬取「${nickname}」导入 ${artworkIds.length} 张` });
     return { artistId, nickname, found: items.length, imported: artworkIds.length, skipped, failed, artworkIds };
   }
 }

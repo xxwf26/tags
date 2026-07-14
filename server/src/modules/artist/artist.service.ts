@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { db, schema } from '../../database/db.js';
-import { eq, inArray, desc } from 'drizzle-orm';
+import { eq, inArray, desc, isNull, and } from 'drizzle-orm';
+import { logOperation } from '../operation/op.js';
 
 @Injectable()
 export class ArtistService {
@@ -10,7 +11,7 @@ export class ArtistService {
     const allWorks = await db.select({
       id: schema.artworks.id, artistId: schema.artworks.artistId,
       thumbUrl: schema.artworks.thumbUrl, imageUrl: schema.artworks.imageUrl,
-    }).from(schema.artworks).orderBy(desc(schema.artworks.id));
+    }).from(schema.artworks).where(isNull(schema.artworks.deletedAt)).orderBy(desc(schema.artworks.id));
     const coversByArtist = new Map<number, string[]>();
     const countByArtist = new Map<number, number>();
     for (const w of allWorks) {
@@ -39,6 +40,7 @@ export class ArtistService {
     if (body.engageStatus) patch.engageStatus = body.engageStatus;
     if (body.engageNote !== undefined) patch.engageNote = body.engageNote;
     await db.update(schema.artists).set(patch).where(eq(schema.artists.id, id));
+    await logOperation({ type: 'artist_engage', targetType: 'artist', targetId: id, summary: `更新建联状态：${body.engageStatus || ''}` });
     return this.getOne(id);
   }
 
@@ -49,6 +51,7 @@ export class ArtistService {
       links: body.links ?? null,
     });
     const [a] = await db.select().from(schema.artists).where(eq(schema.artists.id, (r as any).insertId));
+    await logOperation({ type: 'artist_create', targetType: 'artist', targetId: a?.id, summary: `新建画师「${body.name}」` });
     return a;
   }
 
@@ -62,7 +65,7 @@ export class ArtistService {
 
   // 画风分布：按作品 genre 标签聚合 + 横竖计数 + 缺横/缺竖标记
   private async styleDistribution(artistId: number) {
-    const works = await db.select().from(schema.artworks).where(eq(schema.artworks.artistId, artistId));
+    const works = await db.select().from(schema.artworks).where(and(eq(schema.artworks.artistId, artistId), isNull(schema.artworks.deletedAt)));
     const workIds = works.map(w => w.id);
     if (!workIds.length) return { total: 0, styles: [], missing: [] };
 

@@ -5,6 +5,7 @@ import { ArtistsPage } from './pages/ArtistsPage';
 import { ArtistPage } from './pages/ArtistPage';
 import { DiscoverPage } from './pages/DiscoverPage';
 import { ConfigPage } from './pages/ConfigPage';
+import { AdminPage } from './pages/AdminPage';
 import { EntryDialog } from './components/EntryDialog';
 import { ImageSearchDialog } from './components/ImageSearchDialog';
 import { useState } from 'react';
@@ -29,6 +30,7 @@ function NavBar({ kw, setKw }: { kw: string; setKw: (s: string) => void }) {
             <Link to="/gallery" className={`px-2 md:px-2.5 py-1 rounded-full ${loc.pathname === '/gallery' ? 'text-xhs font-medium' : 'text-stone-500'}`}>画廊</Link>
             <Link to="/discover" className={`px-2 md:px-2.5 py-1 rounded-full ${loc.pathname === '/discover' ? 'text-xhs font-medium' : 'text-stone-500'}`}>发现</Link>
             <Link to="/config" className={`px-2 md:px-2.5 py-1 rounded-full ${loc.pathname === '/config' ? 'text-xhs font-medium' : 'text-stone-500'}`}>配置</Link>
+            <Link to="/admin" className={`px-2 md:px-2.5 py-1 rounded-full ${loc.pathname === '/admin' ? 'text-xhs font-medium' : 'text-stone-500'}`}>管理</Link>
           </nav>
           <div className="flex-1 max-w-md mx-auto hidden md:block">
             <input value={kw} onChange={e => setKw(e.target.value)} placeholder="🔍 搜画风 / 画师 / 标题，如「油画」"
@@ -55,6 +57,7 @@ export default function App() {
           <Route path="/gallery" element={<GalleryPage kw={kw} setKw={setKw} />} />
           <Route path="/discover" element={<DiscoverPage />} />
           <Route path="/config" element={<ConfigPage />} />
+          <Route path="/admin" element={<AdminPage />} />
           <Route path="/artist/:id" element={<ArtistPage />} />
         </Routes>
       </BrowserRouter>

@@ -61,12 +61,30 @@ export const artworks = mysqlTable('artworks', {
   tagConfidence: float('tag_confidence'),
   tagStatus: mysqlEnum('tag_status', ['pending', 'confirmed']).default('pending'),
   embedding: json('embedding'),
+  deletedAt: datetime('deleted_at'),                  // 软删时间戳（null=正常，非 null=已删除可恢复）
   createdAt: datetime('created_at').default(sql`now()`),
 }, (t) => ({
   artistIdx: index('idx_artist').on(t.artistId),
   hashIdx: index('idx_hash').on(t.imageHash),
   statusIdx: index('idx_status').on(t.tagStatus),
   orientIdx: index('idx_orient').on(t.orientation),
+  deletedIdx: index('idx_deleted').on(t.deletedAt),
+}));
+
+// 操作记录（审计日志 + 撤销）
+export const operations = mysqlTable('operations', {
+  id: bigint('id', { mode: 'number' }).autoincrement().primaryKey(),
+  type: varchar('type', { length: 64 }),              // artwork_delete/artwork_create/artwork_confirm/artist_create/artist_engage/crawl_import/promote
+  targetType: varchar('target_type', { length: 32 }), // artwork/artist/candidate
+  targetId: bigint('target_id', { mode: 'number' }),
+  summary: varchar('summary', { length: 255 }),
+  payload: json('payload'),                           // 撤销用快照
+  undoable: tinyint('undoable').default(0),
+  undone: tinyint('undone').default(0),
+  createdAt: datetime('created_at').default(sql`now()`),
+}, (t) => ({
+  typeIdx: index('idx_op_type').on(t.type),
+  targetIdx: index('idx_op_target').on(t.targetType, t.targetId),
 }));
 
 // 作品 ↔ 标签

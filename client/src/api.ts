@@ -159,3 +159,18 @@ export function tagsByTopDim(tree: TagNode[]) {
   }
   return map;
 }
+
+export type Operation = {
+  id: number; type: string; targetType: string | null; targetId: number | null;
+  summary: string | null; payload: any; undoable: number; undone: number; createdAt: string;
+};
+export async function fetchOperations(limit = 100): Promise<Operation[]> {
+  const r = await fetch(BASE + '/operations?limit=' + limit);
+  if (!r.ok) throw new Error('operations failed');
+  return r.json();
+}
+export async function undoOperation(id: number) {
+  const r = await fetch(BASE + '/operations/' + id + '/undo', { method: 'POST' });
+  if (!r.ok) throw new Error('undo failed');
+  return r.json();
+}
