@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
 import { GalleryPage } from './pages/GalleryPage';
+import { ArtistsPage } from './pages/ArtistsPage';
 import { ArtistPage } from './pages/ArtistPage';
 import { DiscoverPage } from './pages/DiscoverPage';
 import { ConfigPage } from './pages/ConfigPage';
@@ -12,7 +13,7 @@ const queryClient = new QueryClient();
 
 function NavBar({ kw, setKw }: { kw: string; setKw: (s: string) => void }) {
   const loc = useLocation();
-  const back = loc.pathname !== '/';
+  const back = loc.pathname.startsWith('/artist/');
   const [entry, setEntry] = useState(false);
   const [imgSearch, setImgSearch] = useState(false);
   return (
@@ -24,7 +25,8 @@ function NavBar({ kw, setKw }: { kw: string; setKw: (s: string) => void }) {
             <span className="bg-xhs text-white w-7 h-7 rounded-lg flex items-center justify-center text-sm">画</span><span className="hidden sm:inline">画风库</span>
           </Link>
           <nav className="flex items-center gap-1 text-sm shrink-0">
-            <Link to="/" className={`px-2 md:px-2.5 py-1 rounded-full ${loc.pathname === '/' ? 'text-xhs font-medium' : 'text-stone-500'}`}>画廊</Link>
+            <Link to="/" className={`px-2 md:px-2.5 py-1 rounded-full ${loc.pathname === '/' ? 'text-xhs font-medium' : 'text-stone-500'}`}>画师库</Link>
+            <Link to="/gallery" className={`px-2 md:px-2.5 py-1 rounded-full ${loc.pathname === '/gallery' ? 'text-xhs font-medium' : 'text-stone-500'}`}>画廊</Link>
             <Link to="/discover" className={`px-2 md:px-2.5 py-1 rounded-full ${loc.pathname === '/discover' ? 'text-xhs font-medium' : 'text-stone-500'}`}>发现</Link>
             <Link to="/config" className={`px-2 md:px-2.5 py-1 rounded-full ${loc.pathname === '/config' ? 'text-xhs font-medium' : 'text-stone-500'}`}>配置</Link>
           </nav>
@@ -49,7 +51,8 @@ export default function App() {
       <BrowserRouter>
         <NavBar kw={kw} setKw={setKw} />
         <Routes>
-          <Route path="/" element={<GalleryPage kw={kw} setKw={setKw} />} />
+          <Route path="/" element={<ArtistsPage />} />
+          <Route path="/gallery" element={<GalleryPage kw={kw} setKw={setKw} />} />
           <Route path="/discover" element={<DiscoverPage />} />
           <Route path="/config" element={<ConfigPage />} />
           <Route path="/artist/:id" element={<ArtistPage />} />

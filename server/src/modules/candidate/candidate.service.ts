@@ -3,7 +3,8 @@ import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { db, schema } from '../../database/db.js';
 import { eq, isNotNull } from 'drizzle-orm';
-import { fetchNote, downloadImage } from '../crawl/xhs.js';
+import { fetchNote, fetchProfileNotes, downloadImage } from '../crawl/xhs.js';
+import { fetchWeiboImages, extractWeiboUid } from '../crawl/weibo.js';
 import { TaggingService } from '../tagging/tagging.service.js';
 import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
 
@@ -113,5 +114,103 @@ export class CandidateService {
   async reject(id: number) {
     await db.update(schema.candidates).set({ status: 'rejected' }).where(eq(schema.candidates.id, id));
     return { candidateId: id, status: 'rejected' };
+  }
+
+  // 按画师小红书主页链接爬其作品封面图，下载→去重→建作品→AI打标。limit 每人最多入库张数。
+  async crawlArtistWorks(artistId: number, limit = 8, doTag = false) {
+    const [artist] = await db.select().from(schema.artists).where(eq(schema.artists.id, artistId));
+    if (!artist) throw new Error('画师不存在');
+    const links = (artist.links as any) || {};
+    const profileUrl: string | undefined = (links.xiaohongshu || [])[0];
+    if (!profileUrl) throw new Error('该画师无小红书主页链接');
+
+    const profile = await fetchProfileNotes(profileUrl);
+    if (!profile.items.length) throw new Error('主页未解析到作品');
+
+    const uploadsDir = join(process.cwd(), 'uploads');
+    await mkdir(uploadsDir, { recursive: true });
+    const tagging = doTag ? new TaggingService() : null;
+
+    // 库内已有 hash（去重）
+    const existingHashes = (await db.select({ hash: schema.artworks.imageHash })
+      .from(schema.artworks).where(isNotNull(schema.artworks.imageHash))).map(a => a.hash).filter(Boolean) as string[];
+
+    const artworkIds: number[] = [];
+    let skipped = 0, failed = 0;
+    for (const it of profile.items) {
+      if (artworkIds.length >= limit) break;
+      try {
+        const { buf, type } = await downloadImage(it.url!);
+        let imageHash: string | null = null;
+        try { imageHash = await aHash(buf); } catch {}
+        if (imageHash && existingHashes.find(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipped++; continue; }
+        const filename = `xhs-${it.noteId || artistId}-${artworkIds.length}.${extOf(type)}`;
+        await writeFile(join(uploadsDir, filename), buf);
+        const [ar] = await db.insert(schema.artworks).values({
+          artistId,
+          title: it.title || null,
+          imageUrl: `/uploads/${filename}`,
+          thumbUrl: `/uploads/${filename}`,
+          imageHash,
+          sourcePlatform: 'xiaohongshu',
+          sourceUrl: profileUrl,
+          tagStatus: 'pending',
+        });
+        const aid = (ar as any).insertId;
+        artworkIds.push(aid);
+        if (imageHash) existingHashes.push(imageHash);
+        if (tagging) { try { await tagging.tagArtwork(aid); } catch {} }
+      } catch { failed++; }
+    }
+    return { artistId, nickname: profile.nickname, found: profile.items.length, imported: artworkIds.length, skipped, failed, artworkIds };
+  }
+
+  // 按画师微博主页爬配图（playwright），下载→去重→建作品→可选AI打标
+  async crawlArtistWorksWeibo(artistId: number, limit = 8, doTag = false) {
+    const [artist] = await db.select().from(schema.artists).where(eq(schema.artists.id, artistId));
+    if (!artist) throw new Error('画师不存在');
+    const links = (artist.links as any) || {};
+    const weiboUrl: string | undefined = (links.weibo || [])[0];
+    if (!weiboUrl) throw new Error('该画师无微博主页链接');
+    const uid = extractWeiboUid(weiboUrl);
+    if (!uid) throw new Error('微博链接无法解析 uid');
+
+    const { nickname, items } = await fetchWeiboImages(uid, limit);
+    if (!items.length) throw new Error('微博主页未解析到配图');
+
+    const uploadsDir = join(process.cwd(), 'uploads');
+    await mkdir(uploadsDir, { recursive: true });
+    const tagging = doTag ? new TaggingService() : null;
+    const existingHashes = (await db.select({ hash: schema.artworks.imageHash })
+      .from(schema.artworks).where(isNotNull(schema.artworks.imageHash))).map(a => a.hash).filter(Boolean) as string[];
+
+    const artworkIds: number[] = [];
+    let skipped = 0, failed = 0;
+    for (const it of items) {
+      if (artworkIds.length >= limit) break;
+      try {
+        const { buf, type } = await downloadImage(it.url);
+        let imageHash: string | null = null;
+        try { imageHash = await aHash(buf); } catch {}
+        if (imageHash && existingHashes.find(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipped++; continue; }
+        const filename = `wb-${it.noteId || artistId}-${artworkIds.length}.${extOf(type)}`;
+        await writeFile(join(uploadsDir, filename), buf);
+        const [ar] = await db.insert(schema.artworks).values({
+          artistId,
+          title: it.title || null,
+          imageUrl: `/uploads/${filename}`,
+          thumbUrl: `/uploads/${filename}`,
+          imageHash,
+          sourcePlatform: 'weibo',
+          sourceUrl: weiboUrl,
+          tagStatus: 'pending',
+        });
+        const aid = (ar as any).insertId;
+        artworkIds.push(aid);
+        if (imageHash) existingHashes.push(imageHash);
+        if (tagging) { try { await tagging.tagArtwork(aid); } catch {} }
+      } catch { failed++; }
+    }
+    return { artistId, nickname, found: items.length, imported: artworkIds.length, skipped, failed, artworkIds };
   }
 }

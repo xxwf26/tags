@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { useArtist, useTags, useArtworks, useTagArtwork, useConfirmArtwork } from '../hooks';
+import { useArtist, useTags, useArtworks, useTagArtwork, useConfirmArtwork, useUpdateEngage } from '../hooks';
 import { FilterBar } from '../components/FilterBar';
 import { ArtworkCard } from '../components/ArtworkCard';
 import { Viewer } from '../components/Viewer';
@@ -17,6 +17,8 @@ const ENGAGE_CLS: Record<string, string> = {
   negotiating: 'text-violet-600 bg-violet-50',
 };
 const COMMISSION: Record<string, string> = { open: '接稿中', full: '档期满', commercial_only: '仅商稿', unknown: '未知' };
+const PLATFORM_LABEL: Record<string, string> = { xiaohongshu: '小红书', mihuashi: '米画师', weibo: '微博', other: '其他' };
+const ENGAGE_ORDER = ['pending', 'contacted', 'negotiating', 'cooperated', 'no_availability', 'rejected', 'unreachable'];
 
 export function ArtistPage() {
   const { id } = useParams();
@@ -58,40 +60,95 @@ export function ArtistPage() {
   const toggleTag = (tid: number) => { const s = new Set(selected); s.has(tid) ? s.delete(tid) : s.add(tid); setSelected(s); };
   const clear = () => { setSelected(new Set()); setOrient('全部'); };
 
+  const engageM = useUpdateEngage(artistId);
+  const [editing, setEditing] = useState(false);
+  const [editStatus, setEditStatus] = useState('');
+  const [editNote, setEditNote] = useState('');
+
   if (artistQ.isLoading) return <div className="text-center text-stone-400 py-16">加载中…</div>;
   if (artistQ.isError || !artistQ.data) return <div className="text-center text-rose-500 py-16">画师不存在</div>;
   const a = artistQ.data;
   const list = artworksQ.data ?? [];
   const total = a.total || 1;
   const habit = a.drawingHabit || {};
+  const styleHint: string[] = a.styleHint ?? [];
+  const links = (a.links || {}) as Record<string, string[]>;
+  const openEdit = () => { setEditStatus(a.engageStatus); setEditNote(a.engageNote || ''); setEditing(true); };
+  const saveEdit = () => engageM.mutate({ engageStatus: editStatus, engageNote: editNote }, { onSuccess: () => setEditing(false) });
 
   return (
     <div className="max-w-[1600px] mx-auto px-3 md:px-6 py-3">
       {/* 头部 */}
       <div className="bg-white rounded-2xl p-5">
         <div className="flex items-start gap-4">
-          <div className="w-16 h-16 rounded-full shrink-0 flex items-center justify-center bg-xhs text-white text-2xl font-bold">{a.name.slice(0, 1)}</div>
+          <div className="w-16 h-16 rounded-full shrink-0 flex items-center justify-center bg-gradient-to-br from-rose-400 to-orange-300 text-white text-2xl font-bold shadow">{a.name.slice(0, 1)}</div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-lg font-bold text-stone-800">{a.name}</h1>
               <span className={`text-[11px] px-2 py-0.5 rounded-full ${ENGAGE_CLS[a.engageStatus] || ''}`}>{ENGAGE[a.engageStatus] || a.engageStatus}</span>
               <span className="text-[11px] text-stone-500 bg-stone-100 px-2 py-0.5 rounded-full">{COMMISSION[a.commission] || a.commission}</span>
+              <button onClick={openEdit} className="text-[11px] text-stone-400 border border-stone-200 rounded-full px-2 py-0.5 hover:border-xhs hover:text-xhs">编辑建联</button>
             </div>
-            <div className="text-[13px] text-stone-500 mt-0.5">{a.bio}</div>
+            {a.bio && <div className="text-[13px] text-stone-500 mt-0.5">{a.bio}</div>}
+            {styleHint.length > 0 && (
+              <div className="flex gap-1 flex-wrap mt-2 items-center">
+                {styleHint.map(s => <span key={s} className="text-[11px] text-xhs bg-xhs-soft px-2 py-0.5 rounded-full">{s}</span>)}
+                <span className="text-[10px] text-stone-300 ml-1">画师级画风</span>
+              </div>
+            )}
+            {a.engageNote && <div className="text-[12px] text-stone-500 mt-2 bg-stone-50 rounded-lg px-2.5 py-1.5">📝 {a.engageNote}</div>}
+            {Object.keys(links).length > 0 && (
+              <div className="flex gap-2 flex-wrap mt-2">
+                {Object.entries(links).flatMap(([plat, urls]) => (urls || []).map((u, i) => (
+                  <a key={plat + i} href={u} target="_blank" rel="noreferrer"
+                    className="text-[11px] text-stone-500 border border-stone-200 rounded-full px-2.5 py-0.5 hover:border-xhs hover:text-xhs">{PLATFORM_LABEL[plat] || plat} ↗</a>
+                )))}
+              </div>
+            )}
             <div className="flex items-center gap-4 mt-2 text-[13px]">
               <span><b className="text-stone-800">{a.total}</b> <span className="text-stone-400">作品</span></span>
               <span><b className="text-stone-800">{a.styleDist?.length || 0}</b> <span className="text-stone-400">画风</span></span>
             </div>
           </div>
         </div>
-        <div className="flex gap-1.5 flex-wrap mt-4">
-          {['更新频率 ' + (habit.update_frequency || ''), habit.active_time, habit.style_trend, habit.commission_signal].filter(Boolean).map((t, i) => (
-            <span key={i} className="text-[11px] text-stone-500 bg-stone-50 px-2 py-1 rounded">{t}</span>
-          ))}
-        </div>
+        {(habit.update_frequency || habit.active_time || habit.style_trend || habit.commission_signal) && (
+          <div className="flex gap-1.5 flex-wrap mt-4">
+            {['更新频率 ' + (habit.update_frequency || ''), habit.active_time, habit.style_trend, habit.commission_signal].filter(Boolean).map((t, i) => (
+              <span key={i} className="text-[11px] text-stone-500 bg-stone-50 px-2 py-1 rounded">{t}</span>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* 画风分布 */}
+      {/* 建联编辑弹窗 */}
+      {editing && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-6" onClick={() => setEditing(false)}>
+          <div className="bg-white rounded-2xl max-w-sm w-full p-5" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-semibold text-stone-800">编辑建联</h2>
+              <button onClick={() => setEditing(false)} className="text-stone-400 text-xl leading-none">×</button>
+            </div>
+            <label className="text-xs text-stone-400">建联状态</label>
+            <div className="flex gap-1.5 flex-wrap mt-1 mb-3">
+              {ENGAGE_ORDER.map(s => (
+                <span key={s} onClick={() => setEditStatus(s)}
+                  className={`text-[12px] px-3 py-1 rounded-full cursor-pointer border ${editStatus === s ? 'bg-xhs text-white border-xhs' : 'bg-white text-stone-600 border-stone-200'}`}>{ENGAGE[s]}</span>
+              ))}
+            </div>
+            <label className="text-xs text-stone-400">备注</label>
+            <textarea value={editNote} onChange={e => setEditNote(e.target.value)} rows={3}
+              className="w-full mt-1 border border-stone-200 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:border-stone-400" placeholder="档期 / 合作记录 / 采编评价…" />
+            <div className="flex justify-end gap-2 mt-4">
+              <button onClick={() => setEditing(false)} className="px-4 py-2 rounded-full text-stone-500 text-sm">取消</button>
+              <button onClick={saveEdit} disabled={engageM.isPending} className="px-5 py-2 rounded-full bg-xhs text-white text-sm font-medium disabled:opacity-50">{engageM.isPending ? '保存中…' : '保存'}</button>
+            </div>
+            {engageM.isError && <div className="text-xs text-rose-500 mt-2">保存失败：{(engageM.error as Error).message}</div>}
+          </div>
+        </div>
+      )}
+
+      {/* 画风分布（仅有作品时） */}
+      {a.total > 0 && (
       <div className="bg-white rounded-2xl p-5 mt-3">
         <h2 className="font-semibold text-stone-800 text-[15px] mb-3">画风分布 <span className="text-xs text-stone-400 font-normal">（点图例筛选）</span></h2>
         <div className="h-7 rounded-full overflow-hidden flex">
@@ -110,6 +167,7 @@ export function ArtistPage() {
           ))}
         </div>
       </div>
+      )}
 
       {/* 高频标签聚合（画画习惯，从作品统计） */}
       {habitDims.length > 0 && (

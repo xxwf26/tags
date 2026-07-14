@@ -1,20 +1,30 @@
 import { Injectable } from '@nestjs/common';
 import { db, schema } from '../../database/db.js';
-import { eq, inArray } from 'drizzle-orm';
+import { eq, inArray, desc } from 'drizzle-orm';
 
 @Injectable()
 export class ArtistService {
   async list() {
     const artists = await db.select().from(schema.artists);
+    // 批量取每人作品封面（一次查全部作品，按画师归组，各取前 4 张）
+    const allWorks = await db.select({
+      id: schema.artworks.id, artistId: schema.artworks.artistId, thumbUrl: schema.artworks.thumbUrl, imageUrl: schema.artworks.imageUrl,
+    }).from(schema.artworks).orderBy(desc(schema.artworks.id));
+    const coversByArtist = new Map<number, string[]>();
+    const countByArtist = new Map<number, number>();
+    for (const w of allWorks) {
+      if (w.artistId == null) continue;
+      countByArtist.set(w.artistId, (countByArtist.get(w.artistId) ?? 0) + 1);
+      const arr = coversByArtist.get(w.artistId) ?? [];
+      if (arr.length < 4) arr.push(w.thumbUrl || w.imageUrl);
+      coversByArtist.set(w.artistId, arr);
+    }
     const out = [];
     for (const a of artists) {
-      const dist = await this.styleDistribution(a.id);
       out.push({
         ...a,
-        total: dist.total,
-        styleCount: dist.styles.length,
-        topStyle: dist.styles[0]?.style ?? null,
-        styleDist: dist.styles,
+        total: countByArtist.get(a.id) ?? 0,
+        coverThumbs: coversByArtist.get(a.id) ?? [],
       });
     }
     return out;

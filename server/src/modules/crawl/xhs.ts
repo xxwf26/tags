@@ -13,14 +13,14 @@ const HEADERS = {
   'Upgrade-Insecure-Requests': '1',
 };
 
-function get(url: string, redirects = 0, binary = false): Promise<{ status: number; body: any; type?: string }> {
+function get(url: string, redirects = 0, binary = false, extra: Record<string, string> = {}): Promise<{ status: number; body: any; type?: string }> {
   return new Promise((resolve, reject) => {
     const mod = url.startsWith('http:') ? http : https;
-    const req = mod.get(url, { headers: HEADERS, timeout: 25000 }, (res: any) => {
+    const req = mod.get(url, { headers: { ...HEADERS, ...extra }, timeout: 25000 }, (res: any) => {
       if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location && redirects < 6) {
         const next = new URL(res.headers.location, url).href;
         res.resume();
-        return resolve(get(next, redirects + 1, binary));
+        return resolve(get(next, redirects + 1, binary, extra));
       }
       const enc = res.headers['content-encoding'];
       let stream = res;
@@ -85,8 +85,56 @@ export async function fetchNote(input: string) {
   return note;
 }
 
+// 从主页 SSR 的 __INITIAL_STATE__ 解析画师 + 笔记列表（封面图）
+function parseProfile(html: string) {
+  const i = html.indexOf('__INITIAL_STATE__');
+  if (i < 0) return null;
+  const tail = html.slice(i);
+  const eq = tail.indexOf('=');
+  const end = tail.indexOf('</script>');
+  if (eq < 0 || end < 0) return null;
+  let raw = tail.slice(eq + 1, end).trim().replace(/:undefined/g, ':null');
+  let state: any;
+  try { state = JSON.parse(raw); } catch {
+    try { state = JSON.parse(raw.slice(0, raw.lastIndexOf('}') + 1)); } catch { return null; }
+  }
+  const user = state?.user;
+  if (!user) return null;
+  let notes = user.notes;
+  // notes 常见结构：[[...]] 或 [...]（分页数组）
+  if (Array.isArray(notes) && notes.length && Array.isArray(notes[0])) notes = notes.flat();
+  const items = (notes || []).map((n: any) => {
+    const nc = n.noteCard || n;
+    const info = nc.cover?.infoList || [];
+    const best = info.find((x: any) => x.imageScene === 'WB_DFT') || info[info.length - 1] || info[0];
+    return {
+      noteId: nc.noteId || n.id,
+      title: nc.displayTitle || nc.title || '',
+      type: nc.type,
+      xsecToken: nc.xsecToken || n.xsecToken || null,
+      url: best?.url ? String(best.url).replace(/^http:\/\//, 'https://') : null,
+    };
+  }).filter((x: any) => x.url);
+  return {
+    nickname: user.userPageData?.basicInfo?.nickname || user.userInfo?.nickname || '',
+    items,
+  };
+}
+
+// 抓画师主页作品列表（封面图）。profileUrl 形如 https://www.xiaohongshu.com/user/profile/{id}
+export async function fetchProfileNotes(profileUrl: string) {
+  const { status, body } = await get(profileUrl);
+  const profile = parseProfile(body);
+  if (!profile) throw new Error(`主页解析失败 (status ${status})，可能链接过期或页面结构变化`);
+  return profile;
+}
+
 export async function downloadImage(url: string): Promise<{ buf: Buffer; type: string }> {
-  const { status, body, type } = await get(url, 0, true);
+  // CDN 防盗链：小红书/微博需带对应 Referer
+  let extra: Record<string, string> = {};
+  if (url.includes('xhscdn.com')) extra = { Referer: 'https://www.xiaohongshu.com/' };
+  else if (url.includes('sinaimg.cn')) extra = { Referer: 'https://m.weibo.cn/' };
+  const { status, body, type } = await get(url, 0, true, extra);
   if (status !== 200 || !body || body.length < 2000) throw new Error(`图下载失败 status ${status}`);
   return { buf: body, type: type || 'image/jpeg' };
 }

@@ -46,3 +46,12 @@ verify/links.txt
 verify/gold.json
 verify/gold.seed.json
 verify/report.md
+
+# 米画师登录态（含凭据，勿提交）
+server/mhs-auth.json
+server/mhs-cookie.txt
+
+# 数据交付包（单独发伙伴，不进git）
+server/style_atlas_data.sql
+server/style_atlas_data_package.zip
+server/style_atlas_data_package/

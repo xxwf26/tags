@@ -28,4 +28,16 @@ export class CandidateController {
   reject(@Param('id', ParseIntPipe) id: number) {
     return this.candidateService.reject(id);
   }
+
+  // 按画师主页爬作品：POST /api/artists/:id/crawl-works  body: { limit?, tag? }
+  @Post('artists/:id/crawl-works')
+  crawlWorks(@Param('id', ParseIntPipe) id: number, @Body() body: { limit?: number; tag?: boolean }) {
+    return this.candidateService.crawlArtistWorks(id, body.limit ?? 8, body.tag ?? false);
+  }
+
+  // 按画师微博主页爬作品：POST /api/artists/:id/crawl-works-weibo
+  @Post('artists/:id/crawl-works-weibo')
+  crawlWorksWeibo(@Param('id', ParseIntPipe) id: number, @Body() body: { limit?: number; tag?: boolean }) {
+    return this.candidateService.crawlArtistWorksWeibo(id, body.limit ?? 8, body.tag ?? false);
+  }
 }

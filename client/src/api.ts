@@ -14,8 +14,9 @@ export type Artwork = {
 export type StyleDistItem = { style: string; count: number; h: number; v: number; both: boolean; missingOrient: string | null };
 export type Artist = {
   id: number; name: string; bio: string | null; engageStatus: string; commission: string;
-  links: any; drawingHabit: any; engageNote?: string | null;
-  total: number; styleDist: StyleDistItem[]; styleCount?: number; topStyle?: string | null; missingStyles?: string[];
+  links: any; drawingHabit: any; engageNote?: string | null; styleHint?: string[] | null;
+  total: number; styleDist?: StyleDistItem[]; styleCount?: number; topStyle?: string | null; missingStyles?: string[];
+  coverThumbs?: string[];
 };
 
 const BASE = '/api';
@@ -49,6 +50,13 @@ export async function fetchArtists(): Promise<Artist[]> {
 export async function fetchArtist(id: number): Promise<Artist> {
   const r = await fetch(BASE + '/artists/' + id);
   if (!r.ok) throw new Error('artist failed');
+  return r.json();
+}
+export async function updateEngage(id: number, body: { engageStatus?: string; engageNote?: string }): Promise<Artist> {
+  const r = await fetch(BASE + '/artists/' + id + '/engage', {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error('update engage failed');
   return r.json();
 }
 export async function createArtwork(fd: FormData): Promise<Artwork> {

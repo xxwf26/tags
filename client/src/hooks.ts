@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchTags, fetchTagsAll, fetchArtworks, fetchArtists, fetchArtist, createArtwork, tagArtwork, tagBatch, confirmArtwork, crawlNote, fetchCandidates, promoteCandidate, rejectCandidate, searchByImage, createTag, updateTag, deleteTag, createDimension, type Artwork } from './api';
+import { fetchTags, fetchTagsAll, fetchArtworks, fetchArtists, fetchArtist, createArtwork, updateEngage, tagArtwork, tagBatch, confirmArtwork, crawlNote, fetchCandidates, promoteCandidate, rejectCandidate, searchByImage, createTag, updateTag, deleteTag, createDimension, type Artwork, type Artist } from './api';
 
 export function useTags() {
   return useQuery({ queryKey: ['tags'], queryFn: fetchTags });
@@ -15,6 +15,13 @@ export function useArtists() {
 }
 export function useArtist(id?: number) {
   return useQuery({ queryKey: ['artist', id], queryFn: () => fetchArtist(id!), enabled: !!id });
+}
+export function useUpdateEngage(id: number) {
+  const qc = useQueryClient();
+  return useMutation<Artist, Error, { engageStatus?: string; engageNote?: string }>({
+    mutationFn: (body) => updateEngage(id, body),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['artist', id] }); qc.invalidateQueries({ queryKey: ['artists'] }); },
+  });
 }
 export function useCreateArtwork() {
   const qc = useQueryClient();
