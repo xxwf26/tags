@@ -1,0 +1,100 @@
+import { useState } from 'react';
+import { useCandidates, useCrawlNote, usePromoteCandidate, useRejectCandidate, useArtists } from '../hooks';
+
+export function DiscoverPage() {
+  const [input, setInput] = useState('');
+  const crawl = useCrawlNote();
+  const promote = usePromoteCandidate();
+  const reject = useRejectCandidate();
+  const artistsQ = useArtists();
+  const candsQ = useCandidates('pending');
+  // 每个候选的转正选项：artistId 选择
+  const [choice, setChoice] = useState<Record<number, { artistId: string; newArtist: boolean }>>({});
+
+  const submit = () => { if (input.trim()) { crawl.mutate(input.trim(), { onSuccess: () => setInput('') }); } };
+  const getChoice = (id: number) => choice[id] ?? { artistId: '', newArtist: true };
+
+  return (
+    <div className="max-w-[1600px] mx-auto px-6 py-3">
+      <div className="bg-white rounded-2xl p-5 border border-stone-100">
+        <h2 className="font-semibold text-stone-800 text-[15px] mb-1">外部采集 · 发现</h2>
+        <p className="text-xs text-stone-400 mb-3">贴小红书笔记链接 → SSR 抓取入候选队列 → 复核转正入库（自动 AI 打标）</p>
+        <div className="flex gap-2">
+          <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && submit()}
+            placeholder="https://www.xiaohongshu.com/explore/... 或 xhslink.com/..."
+            className="flex-1 border border-stone-200 rounded-full px-4 py-2 text-sm focus:border-xhs outline-none" />
+          <button onClick={submit} disabled={crawl.isPending}
+            className="bg-xhs text-white text-sm px-5 py-2 rounded-full font-medium disabled:opacity-50">
+            {crawl.isPending ? '采集中…' : '采集'}
+          </button>
+        </div>
+        {crawl.isError && <div className="text-xs text-rose-500 mt-2">采集失败：{(crawl.error as Error).message}</div>}
+        {crawl.data?.dedup && <div className="text-xs text-amber-600 mt-2">该笔记已在候选队列</div>}
+      </div>
+
+      <div className="flex items-center justify-between mb-2.5 mt-4 px-1">
+        <span className="text-[13px] text-stone-500">待复核候选 <b className="text-stone-700">{candsQ.data?.length ?? 0}</b></span>
+      </div>
+
+      <div className="space-y-3">
+        {candsQ.data?.map(c => {
+          const ch = getChoice(c.id);
+          return (
+            <div key={c.id} className="bg-white rounded-2xl p-4 border border-stone-100">
+              <div className="flex gap-4">
+                {/* 缩略图 */}
+                <div className="flex gap-2 shrink-0">
+                  {c.raw.images.slice(0, 4).map((im, i) => (
+                    <img key={i} src={im.url} referrerPolicy="no-referrer"
+                      className="w-20 h-20 object-cover rounded-lg bg-stone-100"
+                      onError={e => ((e.target as HTMLImageElement).style.opacity = '0.3')} alt="" />
+                  ))}
+                </div>
+                {/* 信息 */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-medium text-stone-800 text-sm">{c.raw.title}</span>
+                    <span className="text-[11px] text-stone-400">{c.raw.images.length} 张图</span>
+                  </div>
+                  <div className="text-[12px] text-stone-500 mt-0.5">画师：{c.artistName || '未知'} · 来源：小红书</div>
+                  <div className="flex gap-1 flex-wrap mt-1.5">
+                    {c.raw.tags.map((t, i) => <span key={i} className="text-[10px] text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded">{t}</span>)}
+                  </div>
+                </div>
+              </div>
+              {/* 操作：转正 / 丢弃 */}
+              <div className="flex items-center gap-2 mt-3 pt-3 border-t border-stone-100 flex-wrap">
+                <label className="flex items-center gap-1 text-[12px] text-stone-600">
+                  <input type="checkbox" checked={ch.newArtist} className="accent-[#FF2442]"
+                    onChange={e => setChoice(s => ({ ...s, [c.id]: { ...ch, newArtist: e.target.checked, artistId: e.target.checked ? '' : ch.artistId } }))} />
+                  新建画师「{c.artistName}」
+                </label>
+                {!ch.newArtist && (
+                  <select value={ch.artistId} onChange={e => setChoice(s => ({ ...s, [c.id]: { ...ch, artistId: e.target.value } }))}
+                    className="text-[12px] border border-stone-200 rounded-full px-2 py-1">
+                    <option value="">选择已有画师…</option>
+                    {artistsQ.data?.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                  </select>
+                )}
+                <button
+                  onClick={() => promote.mutate({ id: c.id, body: ch.newArtist ? { newArtist: true } : { artistId: Number(ch.artistId) } })}
+                  disabled={promote.isPending || (!ch.newArtist && !ch.artistId)}
+                  className="ml-auto bg-xhs text-white text-[12px] px-4 py-1.5 rounded-full font-medium disabled:opacity-40">
+                  {promote.isPending ? '转正中…' : '转正入库（含 AI 打标）'}
+                </button>
+                <button onClick={() => reject.mutate(c.id)}
+                  className="text-[12px] text-stone-500 border border-stone-200 px-3 py-1.5 rounded-full hover:bg-stone-50">丢弃</button>
+              </div>
+            </div>
+          );
+        })}
+        {!candsQ.isLoading && !candsQ.data?.length && (
+          <div className="text-center py-16">
+            <div className="text-5xl mb-3">🔍</div>
+            <div className="text-stone-400 text-sm">没有待复核候选，贴个小红书笔记链接开始采集</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

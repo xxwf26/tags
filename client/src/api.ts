@@ -66,6 +66,31 @@ export async function confirmArtwork(id: number) {
   if (!r.ok) throw new Error('confirm failed');
   return r.json();
 }
+export type Candidate = {
+  id: number; sourcePlatform: string; sourceUrl: string; artistName: string | null;
+  raw: { noteId?: string; title: string; desc: string; tags: string[]; images: { url: string; width: number | null; height: number | null }[] };
+  status: string; promotedArtistId: number | null; dedup?: boolean;
+};
+export async function crawlNote(input: string): Promise<Candidate> {
+  const r = await fetch(BASE + '/crawl/note', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: input }) });
+  if (!r.ok) throw new Error('crawl failed');
+  return r.json();
+}
+export async function fetchCandidates(status = 'pending'): Promise<Candidate[]> {
+  const r = await fetch(BASE + '/candidates?status=' + status);
+  if (!r.ok) throw new Error('candidates failed');
+  return r.json();
+}
+export async function promoteCandidate(id: number, body: { artistId?: number; newArtist?: boolean }) {
+  const r = await fetch(BASE + '/candidates/' + id + '/promote', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error('promote failed');
+  return r.json();
+}
+export async function rejectCandidate(id: number) {
+  const r = await fetch(BASE + '/candidates/' + id + '/reject', { method: 'POST' });
+  if (!r.ok) throw new Error('reject failed');
+  return r.json();
+}
 
 // 按顶层维度聚合标签（genre 的子维度标签收拢到 genre 下）
 export function tagsByTopDim(tree: TagNode[]) {

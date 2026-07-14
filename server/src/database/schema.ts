@@ -78,6 +78,21 @@ export const artworkTags = mysqlTable('artwork_tags', {
   pk: primaryKey({ columns: [t.artworkId, t.tagId] }),
 }));
 
+// 候选（外部采集：小红书笔记 → 复核队列 → 转正入库）
+export const candidates = mysqlTable('candidates', {
+  id: bigint('id', { mode: 'number' }).autoincrement().primaryKey(),
+  sourcePlatform: varchar('source_platform', { length: 32 }).default('xiaohongshu'),
+  sourceUrl: varchar('source_url', { length: 512 }),
+  artistName: varchar('artist_name', { length: 128 }),
+  raw: json('raw'),                            // {title, desc, tags[], images:[{url,width,height}]}
+  status: mysqlEnum('status', ['pending', 'promoted', 'merged', 'rejected']).default('pending'),
+  dedupArtistId: bigint('dedup_artist_id', { mode: 'number' }),
+  promotedArtistId: bigint('promoted_artist_id', { mode: 'number' }),
+  createdAt: datetime('created_at').default(sql`now()`),
+}, (t) => ({
+  statusIdx: index('idx_cand_status').on(t.status),
+}));
+
 export type Artist = typeof artists.$inferSelect;
 export type Artwork = typeof artworks.$inferSelect;
 export type Tag = typeof tags.$inferSelect;

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useTags, useArtists, useCreateArtwork } from '../hooks';
 import { tagsByTopDim, tagArtwork } from '../api';
 
@@ -27,7 +27,7 @@ export function EntryDialog({ onClose }: { onClose: () => void }) {
 
   const byDim = tagsByTopDim(tagsQ.data ?? []);
 
-  const onFile = (f: File | null) => {
+  const loadFile = useCallback((f: File | null) => {
     setFile(f);
     if (f) {
       const url = URL.createObjectURL(f);
@@ -35,7 +35,24 @@ export function EntryDialog({ onClose }: { onClose: () => void }) {
       img.onload = () => { setDims({ w: img.naturalWidth, h: img.naturalHeight }); URL.revokeObjectURL(url); };
       img.src = url;
     } else setDims(null);
-  };
+  }, []);
+  const onFile = loadFile;
+
+  // 粘贴上传：对话框打开时监听 window paste
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (const it of items) {
+        if (it.kind === 'file' && it.type.startsWith('image/')) {
+          const f = it.getAsFile();
+          if (f) { e.preventDefault(); loadFile(f); break; }
+        }
+      }
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  }, [loadFile]);
   const toggle = (id: number) => {
     const s = new Set(selected); s.has(id) ? s.delete(id) : s.add(id); setSelected(s);
   };
@@ -82,9 +99,28 @@ export function EntryDialog({ onClose }: { onClose: () => void }) {
           </div>
           <div>
             <label className="text-xs text-stone-400">作品图</label>
-            <input type="file" accept="image/*" onChange={e => onFile(e.target.files?.[0] ?? null)} className="w-full mt-1 text-sm" />
-            {dims && <span className="text-xs text-stone-400 ml-1">{dims.w}×{dims.h} · {dims.w > dims.h ? '横屏' : dims.h > dims.w ? '竖屏' : '方'}</span>}
-            {file && <img src={URL.createObjectURL(file)} className="mt-2 max-h-40 rounded-lg" alt="preview" />}
+            <div
+              onClick={() => document.getElementById('entry-file')?.click()}
+              onDragOver={e => e.preventDefault()}
+              onDrop={e => { e.preventDefault(); onFile(e.dataTransfer.files?.[0] ?? null); }}
+              className="mt-1 border-2 border-dashed border-stone-200 rounded-xl p-4 text-center cursor-pointer hover:border-xhs hover:bg-xhs-soft/30 transition-colors"
+            >
+              {file ? (
+                <div className="flex items-center gap-3">
+                  <img src={URL.createObjectURL(file)} className="w-20 h-20 object-cover rounded-lg" alt="preview" />
+                  <div className="text-left">
+                    <div className="text-[12px] text-stone-700">{file.name}</div>
+                    {dims && <div className="text-[11px] text-stone-400">{dims.w}×{dims.h} · {dims.w > dims.h ? '横屏' : dims.h > dims.w ? '竖屏' : '方'}</div>}
+                    <div className="text-[11px] text-xhs mt-0.5">点击/粘贴/拖入可替换</div>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-[12px] text-stone-400 py-2">
+                  📋 粘贴 / 🖱️ 点击选择 / 📂 拖入图片
+                </div>
+              )}
+              <input id="entry-file" type="file" accept="image/*" onChange={e => onFile(e.target.files?.[0] ?? null)} className="hidden" />
+            </div>
           </div>
           <div>
             <label className="text-xs text-stone-400">多维标签（白名单）</label>
