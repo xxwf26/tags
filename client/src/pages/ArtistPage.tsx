@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { useArtist, useTags, useArtworks } from '../hooks';
+import { useArtist, useTags, useArtworks, useTagArtwork, useConfirmArtwork } from '../hooks';
 import { FilterBar } from '../components/FilterBar';
 import { ArtworkCard } from '../components/ArtworkCard';
 import { Viewer } from '../components/Viewer';
@@ -28,6 +28,8 @@ export function ArtistPage() {
   const [viewerIdx, setViewerIdx] = useState<number | null>(null);
 
   const artworksQ = useArtworks({ artistId, tags: [...selected], orient });
+  const tagM = useTagArtwork();
+  const confirmM = useConfirmArtwork();
   const toggleTag = (tid: number) => { const s = new Set(selected); s.has(tid) ? s.delete(tid) : s.add(tid); setSelected(s); };
   const clear = () => { setSelected(new Set()); setOrient('全部'); };
 
@@ -120,7 +122,9 @@ export function ArtistPage() {
       </div>
 
       {viewerIdx != null && (
-        <Viewer list={list} index={viewerIdx} onClose={() => setViewerIdx(null)} onNav={d => setViewerIdx(v => (v! + d + list.length) % list.length)} />
+        <Viewer list={list} index={viewerIdx} onClose={() => setViewerIdx(null)}
+          onNav={d => setViewerIdx(v => (v! + d + list.length) % list.length)}
+          onTag={(id) => tagM.mutate(id)} onConfirm={(id) => confirmM.mutate(id)} tagging={tagM.isPending} />
       )}
     </div>
   );

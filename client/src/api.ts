@@ -9,6 +9,7 @@ export type Artwork = {
   id: number; title: string | null; imageUrl: string; thumbUrl: string | null;
   width: number | null; height: number | null; orientation: '横' | '竖' | '方';
   tags: ArtworkTag[]; artistId: number | null; artistName: string | null;
+  tagStatus: 'pending' | 'confirmed'; aiTagged: number; tagConfidence: number | null;
 };
 export type StyleDistItem = { style: string; count: number; h: number; v: number; both: boolean; missingOrient: string | null };
 export type Artist = {
@@ -48,6 +49,21 @@ export async function fetchArtist(id: number): Promise<Artist> {
 export async function createArtwork(fd: FormData): Promise<Artwork> {
   const r = await fetch(BASE + '/artworks', { method: 'POST', body: fd });
   if (!r.ok) throw new Error('create failed');
+  return r.json();
+}
+export async function tagArtwork(id: number) {
+  const r = await fetch(BASE + '/tagging/artwork/' + id, { method: 'POST' });
+  if (!r.ok) throw new Error('tag failed');
+  return r.json();
+}
+export async function tagBatch() {
+  const r = await fetch(BASE + '/tagging/batch', { method: 'POST' });
+  if (!r.ok) throw new Error('batch failed');
+  return r.json();
+}
+export async function confirmArtwork(id: number) {
+  const r = await fetch(BASE + '/tagging/artwork/' + id + '/confirm', { method: 'POST' });
+  if (!r.ok) throw new Error('confirm failed');
   return r.json();
 }
 

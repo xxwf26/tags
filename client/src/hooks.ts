@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchTags, fetchArtworks, fetchArtists, fetchArtist, createArtwork, type Artwork } from './api';
+import { fetchTags, fetchArtworks, fetchArtists, fetchArtist, createArtwork, tagArtwork, tagBatch, confirmArtwork, type Artwork } from './api';
 
 export function useTags() {
   return useQuery({ queryKey: ['tags'], queryFn: fetchTags });
@@ -19,4 +19,19 @@ export function useCreateArtwork() {
     mutationFn: createArtwork,
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['artworks'] }); qc.invalidateQueries({ queryKey: ['artists'] }); qc.invalidateQueries({ queryKey: ['artist'] }); },
   });
+}
+export function useTagArtwork() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (id: number) => tagArtwork(id),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['artworks'] }); qc.invalidateQueries({ queryKey: ['artist'] }); } });
+}
+export function useTagBatch() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: () => tagBatch(),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['artworks'] }); qc.invalidateQueries({ queryKey: ['artists'] }); qc.invalidateQueries({ queryKey: ['artist'] }); } });
+}
+export function useConfirmArtwork() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (id: number) => confirmArtwork(id),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['artworks'] }); qc.invalidateQueries({ queryKey: ['artist'] }); } });
 }

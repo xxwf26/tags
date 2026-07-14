@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTags, useArtists, useCreateArtwork } from '../hooks';
-import { tagsByTopDim } from '../api';
+import { tagsByTopDim, tagArtwork } from '../api';
 
 const DIM_ROWS = [
   { code: 'genre', label: '画风' },
@@ -22,6 +22,8 @@ export function EntryDialog({ onClose }: { onClose: () => void }) {
   const [file, setFile] = useState<File | null>(null);
   const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [autoTag, setAutoTag] = useState(true);
+  const [tagging, setTagging] = useState(false);
 
   const byDim = tagsByTopDim(tagsQ.data ?? []);
 
@@ -47,7 +49,15 @@ export function EntryDialog({ onClose }: { onClose: () => void }) {
     if (sourceUrl) fd.append('sourceUrl', sourceUrl);
     if (dims) { fd.append('width', String(dims.w)); fd.append('height', String(dims.h)); }
     fd.append('tagIds', [...selected].join(','));
-    create.mutate(fd, { onSuccess: onClose });
+    create.mutate(fd, {
+      onSuccess: async (art) => {
+        if (autoTag && art.id) {
+          setTagging(true);
+          try { await tagArtwork(art.id); } catch {}
+        }
+        onClose();
+      },
+    });
   };
 
   return (
@@ -100,12 +110,16 @@ export function EntryDialog({ onClose }: { onClose: () => void }) {
             <label className="text-xs text-stone-400">来源链接（可选）</label>
             <input value={sourceUrl} onChange={e => setSourceUrl(e.target.value)} className="w-full mt-1 border border-stone-200 rounded-lg px-3 py-2" placeholder="小红书笔记链接" />
           </div>
+          <label className="flex items-center gap-2 text-sm text-stone-600 cursor-pointer">
+            <input type="checkbox" checked={autoTag} onChange={e => setAutoTag(e.target.checked)} className="accent-[#FF2442]" />
+            录入后用 AI 自动打标（Gemini + 豆包，标签进入待复核）
+          </label>
         </div>
 
         <div className="flex justify-end gap-2 mt-5">
           <button onClick={onClose} className="px-4 py-2 rounded-full text-stone-500 text-sm">取消</button>
-          <button onClick={submit} disabled={create.isPending} className="px-5 py-2 rounded-full bg-xhs text-white text-sm font-medium disabled:opacity-50">
-            {create.isPending ? '提交中…' : '录入'}
+          <button onClick={submit} disabled={create.isPending || tagging} className="px-5 py-2 rounded-full bg-xhs text-white text-sm font-medium disabled:opacity-50">
+            {tagging ? 'AI 打标中…' : create.isPending ? '提交中…' : (autoTag ? '录入并 AI 打标' : '录入')}
           </button>
         </div>
         {create.isError && <div className="text-xs text-rose-500 mt-2">提交失败：{(create.error as Error).message}</div>}

@@ -36,8 +36,11 @@ export function ArtworkCard({ art, index, onOpen, onHover }: {
       <div className="px-2.5 py-2 flex items-center gap-1.5">
         <div className="w-4 h-4 rounded-full bg-xhs shrink-0" />
         <span className="text-[11px] text-stone-500 truncate flex-1">{art.artistName || '未关联画师'}</span>
-        <div className="flex gap-1 shrink-0">
-          {subTags.map((t, i) => <span key={i} className="text-[10px] text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded">{t}</span>)}
+        <span className={`text-[9px] px-1.5 py-0.5 rounded-full shrink-0 ${art.tagStatus === 'confirmed' ? 'text-emerald-600 bg-emerald-50' : 'text-amber-600 bg-amber-50'}`}>
+          {art.tagStatus === 'confirmed' ? '已确认' : '待复核'}
+        </span>
+        <div className="flex gap-1 shrink-0 max-w-[40%]">
+          {subTags.slice(0, 1).map((t, i) => <span key={i} className="text-[10px] text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded">{t}</span>)}
         </div>
       </div>
     </div>

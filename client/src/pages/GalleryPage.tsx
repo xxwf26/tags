@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useTags, useArtworks } from '../hooks';
+import { useTags, useArtworks, useTagArtwork, useTagBatch, useConfirmArtwork } from '../hooks';
 import { FilterBar } from '../components/FilterBar';
 import { ArtworkCard } from '../components/ArtworkCard';
 import { Viewer } from '../components/Viewer';
@@ -11,6 +11,9 @@ export function GalleryPage() {
   const [viewerIdx, setViewerIdx] = useState<number | null>(null);
 
   const artworksQ = useArtworks({ tags: [...selected], orient });
+  const tagM = useTagArtwork();
+  const batchM = useTagBatch();
+  const confirmM = useConfirmArtwork();
 
   const toggleTag = (id: number) => {
     const s = new Set(selected); s.has(id) ? s.delete(id) : s.add(id); setSelected(s);
@@ -29,6 +32,10 @@ export function GalleryPage() {
 
       <div className="flex items-center justify-between mb-2.5 px-1">
         <span className="text-[13px] text-stone-500">共 <b className="text-stone-700">{list.length}</b> 张作品{selected.size > 0 ? '（筛选中）' : ''}</span>
+        <button onClick={() => batchM.mutate()} disabled={batchM.isPending}
+          className="text-[12px] text-xhs border border-xhs/30 rounded-full px-3 py-1 hover:bg-xhs-soft disabled:opacity-40">
+          {batchM.isPending ? '批量打标中…' : '🤖 AI 批量打标未标'}
+        </button>
       </div>
 
       {artworksQ.isLoading && <div className="text-center text-stone-400 py-20">加载中…</div>}
@@ -68,7 +75,9 @@ export function GalleryPage() {
       )}
 
       {viewerIdx != null && (
-        <Viewer list={list} index={viewerIdx} onClose={() => setViewerIdx(null)} onNav={d => setViewerIdx(v => (v! + d + list.length) % list.length)} />
+        <Viewer list={list} index={viewerIdx} onClose={() => setViewerIdx(null)}
+          onNav={d => setViewerIdx(v => (v! + d + list.length) % list.length)}
+          onTag={(id) => tagM.mutate(id)} onConfirm={(id) => confirmM.mutate(id)} tagging={tagM.isPending} />
       )}
     </div>
   );

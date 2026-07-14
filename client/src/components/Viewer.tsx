@@ -6,8 +6,9 @@ function aspectOf(w?: number | null, h?: number | null): string {
   return '3 / 4';
 }
 
-export function Viewer({ list, index, onClose, onNav }: {
+export function Viewer({ list, index, onClose, onNav, onTag, onConfirm, tagging }: {
   list: Artwork[]; index: number; onClose: () => void; onNav: (d: number) => void;
+  onTag?: (id: number) => void; onConfirm?: (id: number) => void; tagging?: boolean;
 }) {
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -48,6 +49,21 @@ export function Viewer({ list, index, onClose, onNav }: {
             {w.artistName && (
               <a href={`#/artist/${w.artistId}`} onClick={onClose} className="inline-block text-[13px] text-white/60 border border-white/15 rounded-full px-3 py-1 hover:bg-white/10">查看画师「{w.artistName}」→</a>
             )}
+            <div className="flex items-center gap-2 mt-4">
+              <span className={`text-[11px] px-2 py-0.5 rounded-full ${w.tagStatus === 'confirmed' ? 'text-emerald-300 bg-emerald-500/20' : 'text-amber-300 bg-amber-500/20'}`}>
+                {w.tagStatus === 'confirmed' ? '✓ 已确认' : '待复核'}
+              </span>
+              {onTag && (
+                <button onClick={() => onTag(w.id)} disabled={tagging}
+                  className="text-[12px] text-white/80 border border-white/20 rounded-full px-3 py-1 hover:bg-white/10 disabled:opacity-40">
+                  {tagging ? 'AI 打标中…' : '🤖 AI 重新打标'}
+                </button>
+              )}
+              {onConfirm && w.tagStatus !== 'confirmed' && (
+                <button onClick={() => onConfirm(w.id)}
+                  className="text-[12px] text-xhs bg-white rounded-full px-3 py-1 font-medium">确认复核</button>
+              )}
+            </div>
           </div>
         </div>
         <button className="w-11 h-11 rounded-full bg-white/10 text-white text-xl hover:bg-white/22 shrink-0" onClick={() => onNav(1)}>›</button>
