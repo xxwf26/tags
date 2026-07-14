@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useTags, useArtworks, useTagArtwork, useTagBatch, useConfirmArtwork } from '../hooks';
+import { useTags, useArtworks, useTagArtwork, useTagBatch, useConfirmArtwork, useDeleteArtwork, useSetArtworkTags } from '../hooks';
 import { FilterBar } from '../components/FilterBar';
 import { ArtworkCard } from '../components/ArtworkCard';
 import { Viewer } from '../components/Viewer';
@@ -14,6 +14,8 @@ export function GalleryPage({ kw = '', setKw }: { kw?: string; setKw?: (s: strin
   const tagM = useTagArtwork();
   const batchM = useTagBatch();
   const confirmM = useConfirmArtwork();
+  const delM = useDeleteArtwork();
+  const setTagsM = useSetArtworkTags();
 
   const toggleTag = (id: number) => {
     const s = new Set(selected); s.has(id) ? s.delete(id) : s.add(id); setSelected(s);
@@ -81,7 +83,10 @@ export function GalleryPage({ kw = '', setKw }: { kw?: string; setKw?: (s: strin
       {viewerIdx != null && (
         <Viewer list={list} index={viewerIdx} onClose={() => setViewerIdx(null)}
           onNav={d => setViewerIdx(v => (v! + d + list.length) % list.length)}
-          onTag={(id) => tagM.mutate(id)} onConfirm={(id) => confirmM.mutate(id)} tagging={tagM.isPending} />
+          onTag={(id) => tagM.mutate(id)} onConfirm={(id) => confirmM.mutate(id)} tagging={tagM.isPending}
+          onDelete={(id) => delM.mutate(id)}
+          onSaveTags={(id, tagIds) => setTagsM.mutate({ id, tagIds })} savingTags={setTagsM.isPending}
+          tagTree={tagsQ.data} />
       )}
     </div>
   );

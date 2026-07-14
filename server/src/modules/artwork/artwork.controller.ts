@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Delete, Query, Param, ParseIntPipe, Body, UseInterceptors, UploadedFile } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Patch, Query, Param, ParseIntPipe, Body, UseInterceptors, UploadedFile } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { ArtworkService } from './artwork.service.js';
@@ -56,5 +56,11 @@ export class ArtworkController {
   @Delete(':id')
   remove(@Param('id', ParseIntPipe) id: number) {
     return this.artworkService.remove(id);
+  }
+
+  // 编辑作品标签：body { tagIds: number[] }
+  @Patch(':id/tags')
+  setTags(@Param('id', ParseIntPipe) id: number, @Body() body: { tagIds: number[] }) {
+    return this.artworkService.setTags(id, (body.tagIds || []).map(Number).filter(Boolean));
   }
 }

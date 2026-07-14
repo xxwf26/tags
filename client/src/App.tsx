@@ -8,6 +8,7 @@ import { ConfigPage } from './pages/ConfigPage';
 import { AdminPage } from './pages/AdminPage';
 import { EntryDialog } from './components/EntryDialog';
 import { ImageSearchDialog } from './components/ImageSearchDialog';
+import { BackToTop } from './components/BackToTop';
 import { useState } from 'react';
 
 const queryClient = new QueryClient();
@@ -60,6 +61,7 @@ export default function App() {
           <Route path="/admin" element={<AdminPage />} />
           <Route path="/artist/:id" element={<ArtistPage />} />
         </Routes>
+        <BackToTop />
       </BrowserRouter>
     </QueryClientProvider>
   );
