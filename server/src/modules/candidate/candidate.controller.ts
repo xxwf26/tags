@@ -1,14 +1,27 @@
 import { Controller, Get, Post, Body, Query, Param, ParseIntPipe } from '@nestjs/common';
 import { CandidateService } from './candidate.service.js';
+import { fetchMihuashiTags } from '../crawl/mihuashi.js';
 
 @Controller()
 export class CandidateController {
   private readonly candidateService = new CandidateService();
 
-  // 采集：POST /api/crawl/note  body: { url | text }
+  // 采集：POST /api/crawl/note  body: { url | text }，支持单条或多条链接（自动提取全部）
   @Post('crawl/note')
   crawl(@Body() body: { url?: string; text?: string }) {
-    return this.candidateService.createFromNote(body.url || body.text || '');
+    return this.candidateService.createFromInput(body.url || body.text || '');
+  }
+
+  // 米画师按画风批量采集：POST /api/crawl/mihuashi { tag, limit }
+  @Post('crawl/mihuashi')
+  crawlMihuashi(@Body() body: { tag?: string; limit?: number }) {
+    return this.candidateService.createMihuashiBatch(body.tag || '', body.limit || 30);
+  }
+
+  // 米画师可用画风标签：GET /api/mihuashi/tags
+  @Get('mihuashi/tags')
+  async mihuashiTags() {
+    return fetchMihuashiTags();
   }
 
   // 候选队列：GET /api/candidates?status=pending

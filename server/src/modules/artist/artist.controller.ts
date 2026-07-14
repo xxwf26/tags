@@ -1,4 +1,4 @@
-import { Controller, Get, Patch, Param, ParseIntPipe, Body } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Param, ParseIntPipe, Body } from '@nestjs/common';
 import { ArtistService } from './artist.service.js';
 
 @Controller('artists')
@@ -13,6 +13,11 @@ export class ArtistController {
   @Get(':id')
   getOne(@Param('id', ParseIntPipe) id: number) {
     return this.artistService.getOne(id);
+  }
+
+  @Post()
+  create(@Body() body: { name: string; bio?: string; links?: any }) {
+    return this.artistService.create(body);
   }
 
   @Patch(':id/engage')

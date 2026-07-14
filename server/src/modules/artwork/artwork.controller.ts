@@ -31,6 +31,7 @@ export class ArtworkController {
   }
 
   // 手动录作品：multipart，file=图，字段 artistId/title/width/height/sourceUrl/tagIds
+  // 浏览器 FormData 以 UTF-8 发送，multer/busboy 正确解码中文（勿做 latin1 转换）
   @Post()
   @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: 30 * 1024 * 1024 } }))
   async create(
@@ -41,10 +42,11 @@ export class ArtworkController {
     const tagIds = String(body.tagIds || '').split(',').map(Number).filter(Boolean);
     return this.artworkService.create({
       artistId: body.artistId ? Number(body.artistId) : undefined,
-      title: body.title,
+      artistName: body.artistName || undefined,
+      title: body.title || undefined,
       width: body.width ? Number(body.width) : undefined,
       height: body.height ? Number(body.height) : undefined,
-      sourceUrl: body.sourceUrl,
+      sourceUrl: body.sourceUrl || undefined,
       tagIds,
       file,
     });

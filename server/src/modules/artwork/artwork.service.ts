@@ -65,9 +65,20 @@ export class ArtworkService {
   }
 
   async create(data: {
-    artistId?: number; title?: string; width?: number; height?: number;
+    artistId?: number; artistName?: string; title?: string; width?: number; height?: number;
     sourceUrl?: string; tagIds: number[]; file: Express.Multer.File;
   }) {
+    // 解析画师：优先 artistId；否则按名字查/建（新作者自动入库）
+    let artistId = data.artistId ?? null;
+    if (!artistId && data.artistName) {
+      const all = await db.select().from(schema.artists);
+      const ex = all.find(a => (a.name || '').trim() === data.artistName!.trim());
+      if (ex) artistId = ex.id;
+      else {
+        const [r] = await db.insert(schema.artists).values({ name: data.artistName.trim() });
+        artistId = (r as any).insertId;
+      }
+    }
     const orientation = deriveOrientation(data.width, data.height);
     const ext = data.file.originalname.split('.').pop() || 'jpg';
     const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
@@ -89,7 +100,7 @@ export class ArtworkService {
     } catch {}
 
     const [art] = await db.insert(schema.artworks).values({
-      artistId: data.artistId || null,
+      artistId: artistId || null,
       title: data.title || null,
       imageUrl: `/uploads/${filename}`,
       thumbUrl: `/uploads/${filename}`,

@@ -45,6 +45,15 @@ export function extractUrl(text: string): string | null {
   return m ? m[0] : null;
 }
 
+// 提取文本里所有小红书链接（批量采集用）
+export function extractUrls(text: string): string[] {
+  const re = /https?:\/\/(?:www\.)?(?:xiaohongshu\.com|xhslink\.com)\/[^\s一-龥，。]+/g;
+  const out: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) out.push(m[0]);
+  return [...new Set(out)];
+}
+
 function parseNote(html: string) {
   const i = html.indexOf('__INITIAL_STATE__');
   if (i < 0) return null;

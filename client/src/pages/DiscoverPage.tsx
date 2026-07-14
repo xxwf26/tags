@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useCandidates, useCrawlNote, usePromoteCandidate, useRejectCandidate, useArtists } from '../hooks';
+import { useCandidates, useCrawlNote, usePromoteCandidate, useRejectCandidate, useArtists, useMihuashiTags, useCrawlMihuashi } from '../hooks';
 
 export function DiscoverPage() {
   const [input, setInput] = useState('');
@@ -8,6 +8,10 @@ export function DiscoverPage() {
   const reject = useRejectCandidate();
   const artistsQ = useArtists();
   const candsQ = useCandidates('pending');
+  const mhsTagsQ = useMihuashiTags();
+  const mhsCrawl = useCrawlMihuashi();
+  const [mhsTag, setMhsTag] = useState('日系');
+  const [mhsLimit, setMhsLimit] = useState(20);
   // 每个候选的转正选项：artistId 选择
   const [choice, setChoice] = useState<Record<number, { artistId: string; newArtist: boolean }>>({});
 
@@ -18,18 +22,43 @@ export function DiscoverPage() {
     <div className="max-w-[1600px] mx-auto px-3 md:px-6 py-3">
       <div className="bg-white rounded-2xl p-5 border border-stone-100">
         <h2 className="font-semibold text-stone-800 text-[15px] mb-1">外部采集 · 发现</h2>
-        <p className="text-xs text-stone-400 mb-3">贴小红书笔记链接 → SSR 抓取入候选队列 → 复核转正入库（自动 AI 打标）</p>
+        <p className="text-xs text-stone-400 mb-3">贴小红书笔记链接（<b>可多条，一行一个或空格分隔</b>）→ SSR 抓取入候选队列 → 复核转正入库（自动 AI 打标）</p>
         <div className="flex gap-2">
-          <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && submit()}
-            placeholder="https://www.xiaohongshu.com/explore/... 或 xhslink.com/..."
-            className="flex-1 border border-stone-200 rounded-full px-4 py-2 text-sm focus:border-xhs outline-none" />
+          <textarea value={input} onChange={e => setInput(e.target.value)} rows={3}
+            placeholder={"https://www.xiaohongshu.com/explore/...\nhttps://www.xiaohongshu.com/explore/...\n可贴多条笔记链接或整段分享文本"}
+            className="flex-1 border border-stone-200 rounded-xl px-4 py-2 text-sm focus:border-xhs outline-none resize-y" />
           <button onClick={submit} disabled={crawl.isPending}
-            className="bg-xhs text-white text-sm px-5 py-2 rounded-full font-medium disabled:opacity-50">
-            {crawl.isPending ? '采集中…' : '采集'}
+            className="bg-xhs text-white text-sm px-5 py-2 rounded-full font-medium disabled:opacity-50 self-start">
+            {crawl.isPending ? '采集中…' : '批量采集'}
           </button>
         </div>
         {crawl.isError && <div className="text-xs text-rose-500 mt-2">采集失败：{(crawl.error as Error).message}</div>}
-        {crawl.data?.dedup && <div className="text-xs text-amber-600 mt-2">该笔记已在候选队列</div>}
+        {crawl.data && (
+          <div className="text-xs text-stone-500 mt-2">
+            共 {crawl.data.total} 条链接，成功 {crawl.data.results.filter((r: any) => !r.error).length}，失败 {crawl.data.results.filter((r: any) => r.error).length}
+          </div>
+        )}
+      </div>
+
+      {/* 米画师按画风批量搜（playwright 驱动，免登录） */}
+      <div className="bg-white rounded-2xl p-5 border border-stone-100 mt-3">
+        <h2 className="font-semibold text-stone-800 text-[15px] mb-1">米画师 · 按画风批量搜</h2>
+        <p className="text-xs text-stone-400 mb-3">选画风标签 → playwright 驱动米画师页面抓取作品 → 入候选队列（免登录，绕过签名）</p>
+        <div className="flex gap-2 flex-wrap items-center">
+          <select value={mhsTag} onChange={e => setMhsTag(e.target.value)} className="text-[13px] border border-stone-200 rounded-full px-3 py-2">
+            {(mhsTagsQ.data ?? []).map(t => <option key={t.id} value={t.name}>{t.name}（{t.type === 'skill_tag' ? '画风' : '类别'}）</option>)}
+          </select>
+          <label className="text-[12px] text-stone-500">数量
+            <input type="number" value={mhsLimit} min={5} max={60} onChange={e => setMhsLimit(Number(e.target.value))}
+              className="w-16 ml-1 border border-stone-200 rounded-full px-2 py-1 text-center" />
+          </label>
+          <button onClick={() => mhsCrawl.mutate({ tag: mhsTag, limit: mhsLimit })} disabled={mhsCrawl.isPending}
+            className="bg-xhs text-white text-sm px-5 py-2 rounded-full font-medium disabled:opacity-50">
+            {mhsCrawl.isPending ? '搜集中…（约30-60秒）' : '🔍 按画风搜集'}
+          </button>
+          {mhsCrawl.data && <span className="text-xs text-stone-500">抓到 {mhsCrawl.data.total} 张 → 候选队列</span>}
+          {mhsCrawl.isError && <span className="text-xs text-rose-500">失败：{(mhsCrawl.error as Error).message}</span>}
+        </div>
       </div>
 
       <div className="flex items-center justify-between mb-2.5 mt-4 px-1">

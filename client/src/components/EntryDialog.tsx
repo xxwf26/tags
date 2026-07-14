@@ -16,7 +16,8 @@ export function EntryDialog({ onClose, presetArtistId }: { onClose: () => void; 
   const artistsQ = useArtists();
   const create = useCreateArtwork();
 
-  const [artistId, setArtistId] = useState(presetArtistId ? String(presetArtistId) : '');
+  const [artistName, setArtistName] = useState('');
+  const [artistOpen, setArtistOpen] = useState(false);
   const [title, setTitle] = useState('');
   const [sourceUrl, setSourceUrl] = useState('');
   const [file, setFile] = useState<File | null>(null);
@@ -24,6 +25,21 @@ export function EntryDialog({ onClose, presetArtistId }: { onClose: () => void; 
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [autoTag, setAutoTag] = useState(true);
   const [tagging, setTagging] = useState(false);
+
+  // 作者组合框：按输入过滤已有画师；输入新名字则提交时后端自动建
+  const artistMatches = (artistsQ.data ?? [])
+    .filter(a => a.name && (!artistName || a.name.toLowerCase().includes(artistName.toLowerCase())))
+    .slice(0, 6);
+  const isNewArtist = artistName.trim() && !(artistsQ.data ?? []).some(a => a.name === artistName.trim());
+  const locked = !!presetArtistId;
+
+  // 从画师详情页打开时：预填并锁定该画师
+  useEffect(() => {
+    if (presetArtistId && artistsQ.data) {
+      const a = artistsQ.data.find(x => x.id === presetArtistId);
+      if (a) setArtistName(a.name);
+    }
+  }, [presetArtistId, artistsQ.data]);
 
   const byDim = tagsByTopDim(tagsQ.data ?? []);
 
@@ -61,7 +77,7 @@ export function EntryDialog({ onClose, presetArtistId }: { onClose: () => void; 
     if (!file) { alert('请选择图片'); return; }
     const fd = new FormData();
     fd.append('file', file);
-    if (artistId) fd.append('artistId', artistId);
+    if (artistName.trim()) fd.append('artistName', artistName.trim());
     if (title) fd.append('title', title);
     if (sourceUrl) fd.append('sourceUrl', sourceUrl);
     if (dims) { fd.append('width', String(dims.w)); fd.append('height', String(dims.h)); }
@@ -86,13 +102,24 @@ export function EntryDialog({ onClose, presetArtistId }: { onClose: () => void; 
         </div>
 
         <div className="space-y-3 text-sm">
-          <div>
-            <label className="text-xs text-stone-400">画师</label>
-            <select value={artistId} onChange={e => setArtistId(e.target.value)} disabled={!!presetArtistId}
-              className="w-full mt-1 border border-stone-200 rounded-lg px-3 py-2 disabled:bg-stone-100 disabled:text-stone-500">
-              <option value="">（不选）</option>
-              {artistsQ.data?.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
-            </select>
+          <div className="relative">
+            <label className="text-xs text-stone-400">画师 {locked ? <span className="text-stone-300">（已锁定为当前画师）</span> : <span className="text-stone-300">（输入名字搜索已有；新名字自动建画师）</span>}</label>
+            <input value={artistName} disabled={locked} onChange={e => { setArtistName(e.target.value); setArtistOpen(true); }}
+              onFocus={() => setArtistOpen(true)} onBlur={() => setTimeout(() => setArtistOpen(false), 150)}
+              placeholder="输入或选择画师名"
+              className="w-full mt-1 border border-stone-200 rounded-lg px-3 py-2 focus:border-xhs outline-none disabled:bg-stone-100 disabled:text-stone-500" />
+            {!locked && artistOpen && artistMatches.length > 0 && (
+              <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-stone-200 rounded-lg shadow-lg max-h-48 overflow-auto">
+                {artistMatches.map(a => (
+                  <div key={a.id} onMouseDown={() => { setArtistName(a.name); setArtistOpen(false); }}
+                    className="px-3 py-2 text-sm hover:bg-xhs-soft cursor-pointer flex items-center justify-between">
+                    <span>{a.name}</span>
+                    <span className="text-[11px] text-stone-400">{a.total}张作品</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {!locked && isNewArtist && <div className="text-[11px] text-amber-600 mt-1">新画师「{artistName.trim()}」将自动创建</div>}
           </div>
           <div>
             <label className="text-xs text-stone-400">标题</label>
