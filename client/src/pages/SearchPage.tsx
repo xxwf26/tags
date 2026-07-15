@@ -89,7 +89,7 @@ export function SearchPage() {
       const t = (ref?.aiTags ?? []).find(a => a.tagId === id);
       return { tagId: id, label: t?.label ?? '', dimensionId: t?.dimensionId ?? null, mode: tagModes[id] };
     });
-    startSearchM.mutate({ referenceId: selectedRef, tags, platforms: ['mihuashi', 'xiaohongshu', 'weibo'], fuzzyRatio }, {
+    startSearchM.mutate({ referenceId: selectedRef, tags, platforms: ['baidu', 'mihuashi', 'xiaohongshu', 'weibo'], fuzzyRatio }, {
       onSuccess: (r) => { setActiveSession(r.sessionId); setSearching(false); },
       onError: () => setSearching(false),
     });

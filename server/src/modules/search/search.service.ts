@@ -6,6 +6,7 @@ import { eq, and, desc, inArray } from 'drizzle-orm';
 import { searchMihuashi } from '../crawl/mihuashi.js';
 import { searchXhsByKeyword, downloadImage } from '../crawl/xhs.js';
 import { searchWeiboByKeyword } from '../crawl/weibo.js';
+import { searchBaiduImages } from '../crawl/baidu.js';
 import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
 import { logOperation } from '../operation/op.js';
 
@@ -17,7 +18,7 @@ export class SearchService {
     tags: { tagId: number; label: string; dimensionId: number | null; mode: 'must' | 'fuzzy' }[];
     platforms?: string[]; fuzzyRatio?: number;
   }) {
-    const platforms = body.platforms ?? ['mihuashi', 'xiaohongshu', 'weibo'];
+    const platforms = body.platforms ?? ['baidu', 'mihuashi', 'xiaohongshu', 'weibo'];
     const fuzzyRatio = body.fuzzyRatio ?? 0.5;
 
     // 加载维度表，解析每个标签的顶层 code（genre/technique/...）
@@ -62,36 +63,46 @@ export class SearchService {
     for (const platform of platforms) {
       let items: { imageUrl: string; title?: string | null; author?: string | null; sourceUrl?: string; tags?: string[] }[] = [];
       try {
-        if (platform === 'mihuashi') {
-          // 米画师：按必中 genre 画风标签搜索
+        if (platform === 'baidu') {
+          // 百度图片：免登录 JSON API，最可靠
+          const keywords = searchKeywords.length ? searchKeywords : ['插画'];
+          for (const kw of keywords) {
+            const imgs = await searchBaiduImages(kw, 20);
+            console.log(`[search] 百度 "${kw}": ${imgs.length} 张`);
+            items.push(...imgs.map(im => ({
+              imageUrl: im.imageUrl, title: im.title || `百度·${kw}`, author: null, sourceUrl: im.sourceUrl || im.imageUrl, tags: [kw],
+            })));
+          }
+        } else if (platform === 'mihuashi') {
           const keywords = searchKeywords.length ? searchKeywords : ['日系'];
           for (const kw of keywords) {
             const arts = await searchMihuashi(kw, 15);
+            console.log(`[search] 米画师 "${kw}": ${arts.length} 张`);
             items.push(...arts.map(a => ({
               imageUrl: a.imageUrl, title: `米画师·${kw}`, author: null, sourceUrl: a.imageUrl, tags: [kw],
             })));
           }
         } else if (platform === 'xiaohongshu') {
-          // 小红书：按关键词搜索笔记（playwright 驱动搜索页）
           const keywords = searchKeywords.length ? searchKeywords : ['日系插画'];
           for (const kw of keywords) {
             const notes = await searchXhsByKeyword(kw, 15);
+            console.log(`[search] 小红书 "${kw}": ${notes.length} 张`);
             items.push(...notes.map(n => ({
               imageUrl: n.imageUrl, title: n.title || kw, author: n.author || null, sourceUrl: n.sourceUrl || n.imageUrl, tags: [kw],
             })));
           }
         } else if (platform === 'weibo') {
-          // 微博：按关键词搜索配图（m.weibo.cn 搜索 API，免登录）
           const keywords = searchKeywords.length ? searchKeywords : ['插画'];
           for (const kw of keywords) {
             const imgs = await searchWeiboByKeyword(kw, 15);
+            console.log(`[search] 微博 "${kw}": ${imgs.length} 张`);
             items.push(...imgs.map(im => ({
               imageUrl: im.url, title: im.title || `微博·${kw}`, author: null, sourceUrl: im.url, tags: [kw],
             })));
           }
         }
-      } catch (e) {
-        // 单平台失败不影响其他
+      } catch (e: any) {
+        console.error(`[search] ${platform} 失败: ${e.message}`);
       }
 
       // 去重 + 存结果
