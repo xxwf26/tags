@@ -1,6 +1,8 @@
 import 'reflect-metadata';
+process.env.TZ = 'Asia/Shanghai';
 import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
+import { BeijingTimeInterceptor } from './beijing-time.interceptor.js';
 import { AppModule } from './app.module.js';
 import { join } from 'node:path';
 import { NestExpressApplication } from '@nestjs/platform-express';
@@ -10,6 +12,7 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   app.setGlobalPrefix('api');
   app.enableCors();
+  app.useGlobalInterceptors(new BeijingTimeInterceptor());
 
   // 静态托管上传的原图
   app.useStaticAssets(join(process.cwd(), 'uploads'), { prefix: '/uploads/' });

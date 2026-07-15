@@ -12,6 +12,8 @@ const pool = mysql.createPool({
   database: process.env.DB_NAME || 'style_atlas',
   waitForConnections: true,
   connectionLimit: 10,
+  timezone: '+08:00',
+  dateStrings: true,
 });
 
 export const db = drizzle(pool, { schema, mode: 'default' });
