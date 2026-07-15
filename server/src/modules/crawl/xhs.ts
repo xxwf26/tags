@@ -169,7 +169,7 @@ export async function searchXhsByKeyword(keyword: string, limit = 100, cookieStr
           const noteId = nc.note_id || n.id || '';
           if (!noteId || seen.has(noteId)) continue;
           seen.add(noteId);
-          const cover = nc.cover?.url || nc.cover?.info_list?.[0]?.url || '';
+          const cover = nc.cover?.url_default || nc.cover?.url_pre || nc.cover?.url || nc.cover?.info_list?.[0]?.url || '';
           items.push({
             imageUrl: cover ? String(cover).replace(/^http:\/\//, 'https://') : '',
             title: nc.display_title || nc.title || '',
