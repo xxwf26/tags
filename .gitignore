@@ -60,6 +60,7 @@ server/style_atlas_data_package/
 server/audit-report.json
 server/audit-deleted-backup.json
 server/crawl-report.json
+server/crawl-report-weibo.json
 server/sync-pack.tar.gz
 server/sync-pack/
 server/tmp-*.json

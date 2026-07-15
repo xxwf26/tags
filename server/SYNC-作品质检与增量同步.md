@@ -7,21 +7,22 @@
 | 文件 | 改动 |
 |---|---|
 | `server/src/modules/tagging/ai.ts` | 新增 `gateArtwork()` 质检闸门：单模型(Gemini)判图是 `artwork/ad/text_poster/photo/other` 并打质量分(0-10)；非作品或低分则拒。AI 故障时中性放行(退化回原行为，不空库)。`callGemini` 改为 export。 |
-| `server/src/modules/candidate/candidate.service.ts` | `crawlArtistWorks` 改两阶段：先扒候选池(pool，默认20)→ 去重 + 过质检闸门 → 按质量分降序取前 `limit` 入库。返回体加 `pooled`/`rejected`。文件名改为带时间戳唯一，避免同画师多次爬时覆盖。 |
+| `server/src/modules/candidate/candidate.service.ts` | `crawlArtistWorks` 改两阶段：先扒候选池(pool，默认20)→ 去重 + 过质检闸门 → 按质量分降序取前 `limit` 入库。返回体加 `pooled`/`rejected`。文件名改为带时间戳唯一，避免同画师多次爬时覆盖。`crawlArtistWorksWeibo` 同样接入质检闸门+两阶段。 |
 | `server/src/modules/candidate/candidate.controller.ts` | 端点 `POST /api/artists/:id/crawl-works` body 加可选参数 `pool`、`minQuality`。 |
 | `server/src/database/audit-artworks.ts` | **新增**。只读审计脚本：对存量爬取作品逐张过闸门，输出 `audit-report.json`（疑似低质清单），绝不删库。 |
 | `server/src/database/delete-flagged.ts` | **新增**。按审计报告删低质作品：默认 dry-run，`--apply` 才删；删前备份、共用文件保护。 |
-| `server/src/database/crawl-all-works.ts` | **新增**。批量补爬：遍历有小红书链的画师，每人补到目标张数(默认8)，宁缺毋滥、含去重+闸门。输出 `crawl-report.json`。 |
+| `server/src/database/crawl-all-works.ts` | **新增**。批量补爬（小红书）：遍历有小红书链的画师，每人补到目标张数(默认8)，宁缺毋滥、含去重+闸门。输出 `crawl-report.json`。 |
+| `server/src/database/crawl-all-weibo.ts` | **新增**。批量补爬（微博）：同上，走 `crawlArtistWorksWeibo`(playwright)，限速更长防风控。输出 `crawl-report-weibo.json`。 |
 | `server/src/database/export-increment.ts` | **新增**。导出增量同步包（见下）。 |
 | `server/src/database/import-increment.ts` | **新增**。幂等导入同步包（见下）。 |
 
 ### 本轮数据成果（我这边）
 - 存量 915 张 → AI 审计判出 202 张低质 → 删 199 张(保留3张草稿) → 剩 716 张
-- 批量补爬 147 个有小红书链的画师，新增 578 张，144 人达标 8 张(2 人主页真作品不足、1 人链接失效)
-- 当前总计 **1309 张**(小红书1162 + 微博147)，全部有 image_hash、零重复
+- 批量补爬 147 个有小红书链的画师，新增 578 张，144 人达标 8 张
+- 批量补爬 49 个有微博链的画师，新增 100 张，25 人达标 8 张（微博反爬较硬，17 人主页真作品不足、7 人链接解析失败/账号私密，宁缺毋滥未强凑）
+- 当前总计 **1409 张**(小红书1162 + 微博247)，全部有 image_hash、零重复
 
 > 注意：新爬作品**尚未打画风标签**(爬取时 doTag=false)。如需检索，导入后各自跑 `TaggingService.tagBatch()` 补标。
-> 注意：**微博线(48个仅微博画师)尚未接质检闸门、未补爬**，本同步包不含。
 
 ## 二、如何同步我这边的图片+作品数据（增量合并，不覆盖你的数据）
 

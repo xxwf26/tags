@@ -214,8 +214,9 @@ export class CandidateService {
     return { artistId, nickname: profile.nickname, found: profile.items.length, pooled: cands.length, imported: artworkIds.length, skipped, rejected, failed, artworkIds };
   }
 
-  // 按画师微博主页爬配图（playwright），下载→去重→建作品→可选AI打标
-  async crawlArtistWorksWeibo(artistId: number, limit = 8, doTag = false) {
+  // 按画师微博主页爬配图（playwright），下载→去重→AI质检闸门(过滤广告/文字海报+质量分)→择优→建作品→可选AI打标。
+  // limit=最终入库张数；pool=候选池大小(先扒 pool 张再择优)；minQuality=质量分下限。
+  async crawlArtistWorksWeibo(artistId: number, limit = 8, doTag = false, pool = 30, minQuality = 5) {
     const [artist] = await db.select().from(schema.artists).where(eq(schema.artists.id, artistId));
     if (!artist) throw new Error('画师不存在');
     const links = (artist.links as any) || {};
@@ -224,7 +225,7 @@ export class CandidateService {
     const uid = extractWeiboUid(weiboUrl);
     if (!uid) throw new Error('微博链接无法解析 uid');
 
-    const { nickname, items } = await fetchWeiboImages(uid, limit);
+    const { nickname, items } = await fetchWeiboImages(uid, pool);
     if (!items.length) throw new Error('微博主页未解析到配图');
 
     const uploadsDir = join(process.cwd(), 'uploads');
@@ -233,33 +234,48 @@ export class CandidateService {
     const existingHashes = (await db.select({ hash: schema.artworks.imageHash })
       .from(schema.artworks).where(isNotNull(schema.artworks.imageHash))).map(a => a.hash).filter(Boolean) as string[];
 
-    const artworkIds: number[] = [];
-    let skipped = 0, failed = 0;
+    // 阶段一：下载候选池，去重 + AI 闸门判定作品/广告并打质量分
+    type Cand = { it: any; buf: Buffer; type: string; imageHash: string | null; quality: number; category: string };
+    const cands: Cand[] = [];
+    let skipped = 0, failed = 0, rejected = 0;
     for (const it of items) {
-      if (artworkIds.length >= limit) break;
+      if (cands.length >= pool) break;
       try {
         const { buf, type } = await downloadImage(it.url);
         let imageHash: string | null = null;
         try { imageHash = await aHash(buf); } catch {}
         if (imageHash && existingHashes.find(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipped++; continue; }
-        const filename = `wb-${it.noteId || artistId}-${artworkIds.length}.${extOf(type)}`;
-        await writeFile(join(uploadsDir, filename), buf);
+        const gate = await gateArtwork(buf.toString('base64'), type);
+        if (!gate.isArtwork || gate.quality < minQuality) { rejected++; continue; }
+        cands.push({ it, buf, type, imageHash, quality: gate.quality, category: gate.category });
+        if (imageHash) existingHashes.push(imageHash); // 池内去重
+      } catch { failed++; }
+    }
+
+    // 阶段二：按质量分降序，取前 limit 张入库
+    cands.sort((a, b) => b.quality - a.quality);
+    const chosen = cands.slice(0, limit);
+    const artworkIds: number[] = [];
+    for (const c of chosen) {
+      try {
+        const uniq = `${c.it.noteId || 'n'}-${Date.now()}-${artworkIds.length}`;
+        const filename = `wb-${artistId}-${uniq}.${extOf(c.type)}`;
+        await writeFile(join(uploadsDir, filename), c.buf);
         const [ar] = await db.insert(schema.artworks).values({
           artistId,
-          title: it.title || null,
+          title: c.it.title || null,
           imageUrl: `/uploads/${filename}`,
           thumbUrl: `/uploads/${filename}`,
-          imageHash,
+          imageHash: c.imageHash,
           sourcePlatform: 'weibo',
           sourceUrl: weiboUrl,
           tagStatus: 'pending',
         });
         const aid = (ar as any).insertId;
         artworkIds.push(aid);
-        if (imageHash) existingHashes.push(imageHash);
         if (tagging) { try { await tagging.tagArtwork(aid); } catch {} }
       } catch { failed++; }
     }
-    return { artistId, nickname, found: items.length, imported: artworkIds.length, skipped, failed, artworkIds };
+    return { artistId, nickname, found: items.length, pooled: cands.length, imported: artworkIds.length, skipped, rejected, failed, artworkIds };
   }
 }
