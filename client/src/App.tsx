@@ -20,7 +20,7 @@ function NavBar({ kw, setKw }: { kw: string; setKw: (s: string) => void }) {
   const [imgSearch, setImgSearch] = useState(false);
   return (
     <>
-      <header className="sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-stone-100">
+      <header className="fixed top-0 inset-x-0 z-30 bg-white/95 backdrop-blur border-b border-stone-100">
         <div className="max-w-[1600px] mx-auto px-3 md:px-6 h-14 flex items-center gap-2 md:gap-3">
           {back && <Link to="/" className="text-stone-500 text-xl w-8 shrink-0">‹</Link>}
           <Link to="/" className="flex items-center gap-1.5 font-bold text-xhs text-base md:text-lg shrink-0">
@@ -53,14 +53,16 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <NavBar kw={kw} setKw={setKw} />
-        <Routes>
-          <Route path="/" element={<ArtistsPage />} />
-          <Route path="/gallery" element={<GalleryPage kw={kw} setKw={setKw} />} />
-          <Route path="/discover" element={<DiscoverPage />} />
-          <Route path="/config" element={<ConfigPage />} />
-          <Route path="/admin" element={<AdminPage />} />
-          <Route path="/artist/:id" element={<ArtistPage />} />
-        </Routes>
+        <main className="pt-14">
+          <Routes>
+            <Route path="/" element={<ArtistsPage />} />
+            <Route path="/gallery" element={<GalleryPage kw={kw} setKw={setKw} />} />
+            <Route path="/discover" element={<DiscoverPage />} />
+            <Route path="/config" element={<ConfigPage />} />
+            <Route path="/admin" element={<AdminPage />} />
+            <Route path="/artist/:id" element={<ArtistPage />} />
+          </Routes>
+        </main>
         <BackToTop />
       </BrowserRouter>
     </QueryClientProvider>
