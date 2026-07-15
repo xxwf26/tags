@@ -144,8 +144,22 @@ export async function fetchProfileNotes(profileUrl: string) {
   return profile;
 }
 
+// 广告/无关帖关键词过滤
+const AD_KEYWORDS = ['开课', '摆摊', '发布会', '报名', '课程', '招生', '培训', '兼职', '招聘', '众筹', '预售', '下单', '购买', '淘宝', '拼多多', '闲鱼', '微店', '链接', '优惠', '折扣', '活动', '抽奖', '转发', '关注我', '求关注', '互粉'];
+
+export type XhsSearchResult = {
+  noteId: string;
+  title: string;
+  author: string;
+  sourceUrl: string;
+  type: string;
+  images: string[];   // 该帖所有图片URL
+  xhsTags: string[];  // 帖子自带标签（从 corner_tag_info 提取）
+};
+
 // 按关键词搜索小红书笔记（需 cookie，拦截 v2 search API，翻页+限速）
-export async function searchXhsByKeyword(keyword: string, limit = 100, cookieStr?: string): Promise<{ imageUrl: string; title: string; noteId: string; author: string; sourceUrl: string; type: string }[]> {
+// 过滤视频帖 + 广告帖，提取每帖全部图片
+export async function searchXhsByKeyword(keyword: string, limit = 100, cookieStr?: string): Promise<XhsSearchResult[]> {
   if (!cookieStr) return [];
   const { chromium } = await import('playwright');
   const b = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-gpu'] });
@@ -156,10 +170,11 @@ export async function searchXhsByKeyword(keyword: string, limit = 100, cookieStr
   });
   await ctx.addCookies(cookies);
   const p = await ctx.newPage();
-  const items: any[] = [];
+  const items: XhsSearchResult[] = [];
   const seen = new Set<string>();
+  let skippedVideo = 0, skippedAd = 0;
+
   p.on('response', async r => {
-    // 小红书搜索 API（v2 域名是 so.xiaohongshu.com）
     if (r.url().includes('/api/sns/web/v2/search/notes') || r.url().includes('/api/sns/web/v1/search/notes')) {
       try {
         const j = await r.json();
@@ -168,35 +183,50 @@ export async function searchXhsByKeyword(keyword: string, limit = 100, cookieStr
           const nc = n.note_card || n;
           const noteId = nc.note_id || n.id || '';
           if (!noteId || seen.has(noteId)) continue;
+          // 过滤视频帖
+          if (nc.type === 'video') { skippedVideo++; continue; }
+          // 过滤广告/无关帖
+          const title = nc.display_title || nc.title || '';
+          if (AD_KEYWORDS.some(kw => title.includes(kw))) { skippedAd++; continue; }
           seen.add(noteId);
-          const cover = nc.cover?.url_default || nc.cover?.url_pre || nc.cover?.url || nc.cover?.info_list?.[0]?.url || '';
+          // 提取该帖所有图片 URL（image_list → info_list → url）
+          const allImages: string[] = [];
+          for (const im of (nc.image_list || [])) {
+            const infoList = im.info_list || [];
+            const url = (infoList.find((x: any) => x.image_scene === 'WB_DFT') || infoList[infoList.length - 1] || infoList[0])?.url;
+            if (url) allImages.push(String(url).replace(/^http:\/\//, 'https://'));
+          }
+          // 如果 image_list 没图，用 cover
+          if (!allImages.length) {
+            const cover = nc.cover?.url_default || nc.cover?.url_pre || '';
+            if (cover) allImages.push(String(cover).replace(/^http:\/\//, 'https://'));
+          }
+          // 提取帖子标签（corner_tag_info）
+          const xhsTags: string[] = [];
+          for (const tag of (nc.corner_tag_info || [])) {
+            if (tag?.text) xhsTags.push(tag.text);
+          }
           items.push({
-            imageUrl: cover ? String(cover).replace(/^http:\/\//, 'https://') : '',
-            title: nc.display_title || nc.title || '',
-            noteId,
-            author: nc.user?.nickname || '',
+            noteId, title, author: nc.user?.nickname || '',
             sourceUrl: `https://www.xiaohongshu.com/explore/${noteId}`,
-            type: nc.type || 'normal',
+            type: nc.type || 'normal', images: allImages, xhsTags,
           });
         }
       } catch {}
     }
   });
   try {
-    // 先访问首页预热 cookie
     await p.goto('https://www.xiaohongshu.com/', { waitUntil: 'networkidle', timeout: 30000 });
     await p.waitForTimeout(2000);
-    // 搜索
     await p.goto(`https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent(keyword)}&source=web_explore_feed`, { waitUntil: 'networkidle', timeout: 30000 });
     await p.waitForTimeout(6000);
-    // 滚动翻页（限速 3-4 秒/页，防封）
     const maxScrolls = Math.ceil(limit / 20) + 5;
     for (let i = 0; i < maxScrolls && items.length < limit; i++) {
       await p.evaluate(() => window.scrollBy(0, 1200));
-      await p.waitForTimeout(3000 + Math.random() * 1000); // 3-4 秒随机间隔
+      await p.waitForTimeout(3000 + Math.random() * 1000);
     }
   } catch {}
   await b.close();
-  console.log(`[xhs] 搜索 "${keyword}": ${items.length} 条`);
+  console.log(`[xhs] 搜索 "${keyword}": ${items.length} 条（过滤视频 ${skippedVideo}，广告 ${skippedAd}）`);
   return items.slice(0, limit);
 }

@@ -160,6 +160,7 @@ export const searchResults = mysqlTable('search_results', {
   authorUrl: varchar('author_url', { length: 512 }),
   tags: json('tags'),                              // 平台自带标签
   aiTags: json('ai_tags'),                         // AI 给这张图打的标签（可选）
+  allImages: json('all_images'),                   // 该帖所有图片URL（一帖多图）
   imageHash: char('image_hash', { length: 16 }),
   isNew: tinyint('is_new').default(1),             // vs 上一次 session 是否新增
   tier: mysqlEnum('tier', ['tier1', 'tier2', 'promoted', 'rejected']).default('tier1'),

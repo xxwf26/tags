@@ -18,7 +18,7 @@ export class SearchService {
     tags: { tagId: number; label: string; dimensionId: number | null; mode: 'must' | 'fuzzy' }[];
     platforms?: string[]; fuzzyRatio?: number;
   }) {
-    const platforms = body.platforms ?? ['baidu'];
+    const platforms = body.platforms ?? ['xiaohongshu'];
     const xhsCookie = process.env.XHS_COOKIE || '';
     const fuzzyRatio = body.fuzzyRatio ?? 0.5;
 
@@ -89,10 +89,17 @@ export class SearchService {
             const keywords = searchKeywords.length ? searchKeywords : ['插画'];
             for (const kw of keywords) {
               const notes = await searchXhsByKeyword(kw, 100, xhsCookie);
-              console.log(`[search] 小红书 "${kw}": ${notes.length} 张`);
-              items.push(...notes.map(n => ({
-                imageUrl: n.imageUrl, title: n.title || kw, author: n.author || null, sourceUrl: n.sourceUrl || n.imageUrl, tags: [kw],
-              })));
+              console.log(`[search] 小红书 "${kw}": ${notes.length} 帖`);
+              for (const n of notes) {
+                items.push({
+                  imageUrl: n.images[0] || '',  // 首图作缩略图
+                  title: n.title || kw,
+                  author: n.author || null,
+                  sourceUrl: n.sourceUrl,
+                  tags: n.xhsTags || [],  // 帖子自带标签（非搜索关键词）
+                  allImages: n.images,    // 所有图片
+                } as any);
+              }
             }
           }
         } else if (platform === 'weibo') {
@@ -122,6 +129,7 @@ export class SearchService {
           platform,
           sourceUrl: item.sourceUrl || null,
           imageUrl: item.imageUrl || null,
+          allImages: (item as any).allImages || null,
           title: item.title || null,
           author: item.author || null,
           tags: item.tags || [],
