@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useReferences, useUploadReference, useUpdateReferenceTags, useStartSearch, useSearchSessions, useSearchResults, useReviewSearchResult, usePromoteSearchResult, useRejectSearchResult, useTags } from '../hooks';
+import { useReferences, useUploadReference, useUpdateReferenceTags, useStartSearch, useSearchSessions, useSearchResults, useReviewSearchResult, usePromoteSearchResult, useRejectSearchResult, useDeleteReference, useTags } from '../hooks';
 import { tagsByTopDim } from '../api';
 
 const TIER_LABEL: Record<string, { label: string; cls: string }> = {
@@ -32,6 +32,7 @@ export function SearchPage() {
   const reviewM = useReviewSearchResult();
   const promoteM = usePromoteSearchResult();
   const rejectM = useRejectSearchResult();
+  const deleteRef = useDeleteReference();
 
   const ref = (refsQ.data ?? []).find(r => r.id === selectedRef);
   const byDim = tagsByTopDim(tagsQ.data ?? []);
@@ -110,10 +111,15 @@ export function SearchPage() {
         {(refsQ.data ?? []).length > 0 && (
           <div className="flex gap-2 mt-3 flex-wrap">
             {(refsQ.data ?? []).map(r => (
-              <button key={r.id} onClick={() => { setSelectedRef(r.id); setActiveSession(null); }}
-                className={`w-14 h-14 rounded-lg overflow-hidden border-2 ${selectedRef === r.id ? 'border-xhs' : 'border-stone-200'}`}>
-                <img src={r.imageUrl} className="w-full h-full object-cover" alt="" />
-              </button>
+              <div key={r.id} className="relative group">
+                <button onClick={() => { setSelectedRef(r.id); setActiveSession(null); }}
+                  className={`block w-16 h-16 rounded-lg overflow-hidden border-2 ${selectedRef === r.id ? 'border-xhs' : 'border-stone-200'}`}>
+                  <img src={r.imageUrl} className="w-full h-full object-cover" alt="" />
+                </button>
+                <span className="absolute -bottom-1 -right-1 text-[9px] bg-stone-700 text-white rounded-full px-1.5 py-0.5">{r.status === 'tagging' ? '⏳' : '✓'}</span>
+                <button onClick={() => { if (confirm('删除此参考图及其所有搜索记录？')) { deleteRef.mutate(r.id); if (selectedRef === r.id) { setSelectedRef(null); setActiveSession(null); } } }}
+                  className="absolute -top-1.5 -left-1.5 w-5 h-5 rounded-full bg-rose-500 text-white text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity" title="删除参考图">×</button>
+              </div>
             ))}
           </div>
         )}
@@ -169,17 +175,39 @@ export function SearchPage() {
         </div>
       )}
 
-      {/* 搜索历史（session 文件夹） */}
+      {/* 搜索历史（session 文件夹，区分管理） */}
       {selectedRef && sessions.length > 0 && (
         <div className="bg-white rounded-2xl p-4 border border-stone-100 mb-3">
-          <h3 className="font-semibold text-stone-700 text-[14px] mb-2">搜索历史（不覆盖，标新增）</h3>
-          <div className="flex gap-2 flex-wrap">
-            {sessions.map((s, i) => (
-              <button key={s.id} onClick={() => setActiveSession(s.id)}
-                className={`text-[12px] px-3 py-1.5 rounded-full border ${activeSession === s.id ? 'bg-xhs text-white border-xhs' : 'bg-white text-stone-600 border-stone-200'}`}>
-                第{i + 1}次 · {s.resultCount}张{s.newCount > 0 ? `（${s.newCount}新增）` : ''}
-              </button>
-            ))}
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="font-semibold text-stone-700 text-[14px]">搜索历史（{sessions.length} 次，不覆盖）</h3>
+            <span className="text-[11px] text-stone-400">每次搜索独立保留，标新增</span>
+          </div>
+          <div className="space-y-2">
+            {sessions.map((s, i) => {
+              const tags = (s.searchTags as any)?.tags ?? s.searchTags ?? [];
+              const tagLabels = Array.isArray(tags) ? tags.map((t: any) => t.label).filter(Boolean) : [];
+              const ratio = (s.searchTags as any)?.fuzzyRatio;
+              return (
+                <div key={s.id} className={`border rounded-lg p-3 cursor-pointer transition-colors ${activeSession === s.id ? 'border-xhs bg-xhs-soft/30' : 'border-stone-200 hover:border-stone-300'}`}
+                  onClick={() => setActiveSession(s.id)}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[13px] font-medium text-stone-700">第 {i + 1} 次搜索</span>
+                      <span className="text-[10px] text-stone-400">{new Date(s.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+                      {s.newCount > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded bg-xhs text-white">{s.newCount} 新增</span>}
+                    </div>
+                    <span className="text-[12px] text-stone-500">{s.resultCount} 张结果</span>
+                  </div>
+                  <div className="flex gap-1 flex-wrap mt-1.5">
+                    {tagLabels.map((label: string, j: number) => {
+                      const tagMode = tags[j]?.mode;
+                      return <span key={j} className={`text-[10px] px-1.5 py-0.5 rounded ${tagMode === 'must' ? 'bg-xhs/10 text-xhs' : 'bg-amber-100 text-amber-700'}`}>{label}{tagMode === 'must' ? '' : '·模'}</span>;
+                    })}
+                    {ratio != null && <span className="text-[10px] text-stone-400">模糊比例 {Math.round(ratio * 100)}%</span>}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Body, Param, ParseIntPipe, UseInterceptors, UploadedFile } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, ParseIntPipe, UseInterceptors, UploadedFile } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { ReferenceService } from './reference.service.js';
@@ -13,6 +13,9 @@ export class ReferenceController {
   @Get(':id')
   getOne(@Param('id', ParseIntPipe) id: number) { return this.referenceService.getOne(id); }
 
+  @Get(':id/detail')
+  getDetail(@Param('id', ParseIntPipe) id: number) { return this.referenceService.getDetail(id); }
+
   @Post('upload')
   @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: 30 * 1024 * 1024 } }))
   async upload(@UploadedFile() file: Express.Multer.File) {
@@ -24,4 +27,7 @@ export class ReferenceController {
   updateTags(@Param('id', ParseIntPipe) id: number, @Body() body: { manualTags: any[] }) {
     return this.referenceService.updateTags(id, body.manualTags);
   }
+
+  @Delete(':id')
+  remove(@Param('id', ParseIntPipe) id: number) { return this.referenceService.remove(id); }
 }

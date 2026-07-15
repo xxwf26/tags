@@ -67,4 +67,37 @@ export class ReferenceService {
     const [r] = await db.select().from(schema.referenceImages).where(eq(schema.referenceImages.id, id));
     return r;
   }
+
+  // 删除参考图 + 其所有搜索会话 + 结果（软删参考图，硬删 sessions/results）
+  async remove(id: number) {
+    // 删该参考图的所有搜索结果
+    const sessions = await db.select().from(schema.searchSessions)
+      .where(eq(schema.searchSessions.referenceImageId, id));
+    for (const s of sessions) {
+      await db.delete(schema.searchResults).where(eq(schema.searchResults.sessionId, s.id));
+    }
+    // 删搜索会话
+    await db.delete(schema.searchSessions).where(eq(schema.searchSessions.referenceImageId, id));
+    // 删参考图记录（图文件留在 uploads 不删，避免误删）
+    await db.delete(schema.referenceImages).where(eq(schema.referenceImages.id, id));
+    await logOperation({ type: 'reference_delete', targetType: 'reference', targetId: id, summary: `删除参考图 #${id}（含 ${sessions.length} 次搜索）` });
+    return { id, deleted: true, sessionsRemoved: sessions.length };
+  }
+
+  // 获取参考图详情 + 所有搜索会话（含每次的结果数）
+  async getDetail(id: number) {
+    const [ref] = await db.select().from(schema.referenceImages).where(eq(schema.referenceImages.id, id));
+    if (!ref) return null;
+    const sessions = await db.select().from(schema.searchSessions)
+      .where(eq(schema.searchSessions.referenceImageId, id)).orderBy(desc(schema.searchSessions.id));
+    // 每次会话的结果按 tier 统计
+    const sessionsWithStats = [];
+    for (const s of sessions) {
+      const results = await db.select().from(schema.searchResults).where(eq(schema.searchResults.sessionId, s.id));
+      const tierCount: Record<string, number> = {};
+      for (const r of results) { const t = r.tier || 'tier1'; tierCount[t] = (tierCount[t] || 0) + 1; }
+      sessionsWithStats.push({ ...s, resultStats: tierCount });
+    }
+    return { ...ref, sessions: sessionsWithStats };
+  }
 }

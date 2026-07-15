@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchTags, fetchTagsAll, fetchArtworks, fetchArtists, fetchArtist, createArtwork, deleteArtwork, setArtworkTags, updateEngage, tagArtwork, tagBatch, confirmArtwork, crawlNote, fetchCandidates, promoteCandidate, rejectCandidate, searchByImage, createTag, updateTag, deleteTag, createDimension, crawlMihuashi, fetchMihuashiTags, fetchOperations, undoOperation, redoOperation, type Artwork, type Artist , uploadReference, fetchReferences, updateReferenceTags, startSearch, fetchSearchSessions, fetchSearchResults, reviewSearchResult, promoteSearchResult, rejectSearchResult } from './api'
+import { fetchTags, fetchTagsAll, fetchArtworks, fetchArtists, fetchArtist, createArtwork, deleteArtwork, setArtworkTags, updateEngage, tagArtwork, tagBatch, confirmArtwork, crawlNote, fetchCandidates, promoteCandidate, rejectCandidate, searchByImage, createTag, updateTag, deleteTag, createDimension, crawlMihuashi, fetchMihuashiTags, fetchOperations, undoOperation, redoOperation, type Artwork, type Artist, uploadReference, fetchReferences, updateReferenceTags, startSearch, fetchSearchSessions, fetchSearchResults, reviewSearchResult, promoteSearchResult, rejectSearchResult, deleteReference } from './api'
 
 export function useTags() {
   return useQuery({ queryKey: ['tags'], queryFn: fetchTags });
@@ -159,4 +159,9 @@ export function useRejectSearchResult() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (id: number) => rejectSearchResult(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['search-results'] }) });
+}
+export function useDeleteReference() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (id: number) => deleteReference(id),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['references'] }); qc.invalidateQueries({ queryKey: ['search-sessions'] }); } });
 }
