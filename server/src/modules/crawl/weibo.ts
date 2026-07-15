@@ -58,3 +58,38 @@ export async function fetchWeiboImages(uid: string, limit = 8, maxPages = 5): Pr
     await ctx.close();
   }
 }
+
+// 按关键词搜索微博配图（m.weibo.cn 搜索 API，免登录）
+export async function searchWeiboByKeyword(keyword: string, limit = 15): Promise<WeiboImage[]> {
+  const browser = await getBrowser();
+  const ctx = await browser.newContext({ userAgent: UA });
+  const page = await ctx.newPage();
+  const items: WeiboImage[] = [];
+  try {
+    for (let pg = 1; pg <= 3 && items.length < limit; pg++) {
+      const api = `https://m.weibo.cn/api/container/getIndex?containerid=100103type%3D1%26q%3D${encodeURIComponent(keyword)}&page_type=searchall&page=${pg}`;
+      const data: any = await page.evaluate(async (u) => {
+        const r = await fetch(u, { headers: { 'X-Requested-With': 'XMLHttpRequest', 'MWeibo-Pwa': '1' } });
+        if (!r.ok) return null;
+        return r.json();
+      }, api);
+      if (!data?.data?.cards) break;
+      for (const c of data.data.cards) {
+        const mb = c.mblog;
+        if (!mb?.pics?.length) continue;
+        for (const pic of mb.pics) {
+          const url = pic.large?.url || pic.url;
+          if (url && !items.find(x => x.url === url)) {
+            items.push({ url, noteId: mb.id, title: String(mb.text || '').replace(/<[^>]+>/g, '').slice(0, 60) });
+            if (items.length >= limit) break;
+          }
+        }
+        if (items.length >= limit) break;
+      }
+      await page.waitForTimeout(1000);
+    }
+  } finally {
+    await ctx.close();
+  }
+  return items;
+}

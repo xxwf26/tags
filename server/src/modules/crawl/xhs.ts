@@ -143,3 +143,50 @@ export async function fetchProfileNotes(profileUrl: string) {
   if (!profile) throw new Error(`主页解析失败 (status ${status})，可能链接过期或页面结构变化`);
   return profile;
 }
+
+// 按关键词搜索小红书笔记（playwright 驱动搜索页，免登录尝试）
+export async function searchXhsByKeyword(keyword: string, limit = 15): Promise<{ imageUrl: string; title: string; noteId: string; author: string; sourceUrl: string }[]> {
+  const { chromium } = await import('playwright');
+  const b = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-gpu'] });
+  const ctx = await b.newContext();
+  const p = await ctx.newPage();
+  const items: any[] = [];
+  const seen = new Set<string>();
+  // 拦截搜索结果 API
+  p.on('response', async r => {
+    if (r.url().includes('/api/sns/web/v1/search/notes') || r.url().includes('search_notes')) {
+      try {
+        const j = await r.json();
+        const notes = j.data?.items || j.items || [];
+        for (const n of notes) {
+          const nc = n.note_card || n.note || {};
+          const cover = nc.cover?.url || nc.cover?.info_list?.[0]?.url;
+          if (cover && !seen.has(cover)) {
+            seen.add(cover);
+            items.push({
+              imageUrl: String(cover).replace(/^http:\/\//, 'https://'),
+              title: nc.display_title || nc.title || '',
+              noteId: nc.note_id || nc.noteId || '',
+              author: nc.user?.nickname || '',
+              sourceUrl: nc.note_id ? `https://www.xiaohongshu.com/explore/${nc.note_id}` : '',
+            });
+          }
+        }
+      } catch {}
+    }
+  });
+  try {
+    await p.goto(`https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent(keyword)}&source=web_search_result_notes`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await p.waitForTimeout(4000);
+    // 滚动加载
+    for (let i = 0; i < 5 && items.length < limit; i++) {
+      await p.evaluate(() => window.scrollBy(0, 800));
+      await p.waitForTimeout(2000);
+    }
+  } catch {
+    // 搜索页可能需要登录，返回已收集的
+  } finally {
+    await b.close();
+  }
+  return items.slice(0, limit);
+}
