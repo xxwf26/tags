@@ -19,6 +19,7 @@ export class SearchService {
     platforms?: string[]; fuzzyRatio?: number;
   }) {
     const platforms = body.platforms ?? ['baidu'];
+    const xhsCookie = process.env.XHS_COOKIE || '';
     const fuzzyRatio = body.fuzzyRatio ?? 0.5;
 
     // 加载维度表，解析每个标签的顶层 code（genre/technique/...）
@@ -83,13 +84,16 @@ export class SearchService {
             })));
           }
         } else if (platform === 'xiaohongshu') {
-          const keywords = searchKeywords.length ? searchKeywords : ['日系插画'];
-          for (const kw of keywords) {
-            const notes = await searchXhsByKeyword(kw, 15);
-            console.log(`[search] 小红书 "${kw}": ${notes.length} 张`);
-            items.push(...notes.map(n => ({
-              imageUrl: n.imageUrl, title: n.title || kw, author: n.author || null, sourceUrl: n.sourceUrl || n.imageUrl, tags: [kw],
-            })));
+          if (!xhsCookie) { console.error('[search] 小红书: 未配置 XHS_COOKIE，跳过'); }
+          else {
+            const keywords = searchKeywords.length ? searchKeywords : ['插画'];
+            for (const kw of keywords) {
+              const notes = await searchXhsByKeyword(kw, 100, xhsCookie);
+              console.log(`[search] 小红书 "${kw}": ${notes.length} 张`);
+              items.push(...notes.map(n => ({
+                imageUrl: n.imageUrl, title: n.title || kw, author: n.author || null, sourceUrl: n.sourceUrl || n.imageUrl, tags: [kw],
+              })));
+            }
           }
         } else if (platform === 'weibo') {
           const keywords = searchKeywords.length ? searchKeywords : ['插画'];
@@ -105,18 +109,19 @@ export class SearchService {
         console.error(`[search] ${platform} 失败: ${e.message}`);
       }
 
-      // 去重 + 存结果
+      // 去重 + 存结果（按 sourceUrl 去重，imageUrl 空也存）
       const seen = new Set<string>();
       for (const item of items) {
-        if (seen.has(item.imageUrl)) continue;
-        seen.add(item.imageUrl);
-        const isNew = !prevUrls.has(item.sourceUrl || '') && !prevHashes.has(item.imageUrl);
+        const dedupKey = item.sourceUrl || item.imageUrl || '';
+        if (!dedupKey || seen.has(dedupKey)) continue;
+        seen.add(dedupKey);
+        const isNew = !prevUrls.has(dedupKey) && !prevHashes.has(item.imageUrl || '');
         const [rr] = await db.insert(schema.searchResults).values({
           sessionId,
           referenceImageId: body.referenceId,
           platform,
           sourceUrl: item.sourceUrl || null,
-          imageUrl: item.imageUrl,
+          imageUrl: item.imageUrl || null,
           title: item.title || null,
           author: item.author || null,
           tags: item.tags || [],

@@ -144,49 +144,59 @@ export async function fetchProfileNotes(profileUrl: string) {
   return profile;
 }
 
-// 按关键词搜索小红书笔记（playwright 驱动搜索页，免登录尝试）
-export async function searchXhsByKeyword(keyword: string, limit = 15): Promise<{ imageUrl: string; title: string; noteId: string; author: string; sourceUrl: string }[]> {
+// 按关键词搜索小红书笔记（需 cookie，拦截 v2 search API，翻页+限速）
+export async function searchXhsByKeyword(keyword: string, limit = 100, cookieStr?: string): Promise<{ imageUrl: string; title: string; noteId: string; author: string; sourceUrl: string; type: string }[]> {
+  if (!cookieStr) return [];
   const { chromium } = await import('playwright');
   const b = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-gpu'] });
-  const ctx = await b.newContext();
+  const cookies = cookieStr.split('; ').map(c => { const [name, ...r] = c.split('='); return { name, value: r.join('='), domain: '.xiaohongshu.com', path: '/' }; });
+  const ctx = await b.newContext({
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    viewport: { width: 1440, height: 900 }, locale: 'zh-CN',
+  });
+  await ctx.addCookies(cookies);
   const p = await ctx.newPage();
   const items: any[] = [];
   const seen = new Set<string>();
-  // 拦截搜索结果 API
   p.on('response', async r => {
-    if (r.url().includes('/api/sns/web/v1/search/notes') || r.url().includes('search_notes')) {
+    // 小红书搜索 API（v2 域名是 so.xiaohongshu.com）
+    if (r.url().includes('/api/sns/web/v2/search/notes') || r.url().includes('/api/sns/web/v1/search/notes')) {
       try {
         const j = await r.json();
-        const notes = j.data?.items || j.items || [];
+        const notes = j.data?.items || [];
         for (const n of notes) {
-          const nc = n.note_card || n.note || {};
-          const cover = nc.cover?.url || nc.cover?.info_list?.[0]?.url;
-          if (cover && !seen.has(cover)) {
-            seen.add(cover);
-            items.push({
-              imageUrl: String(cover).replace(/^http:\/\//, 'https://'),
-              title: nc.display_title || nc.title || '',
-              noteId: nc.note_id || nc.noteId || '',
-              author: nc.user?.nickname || '',
-              sourceUrl: nc.note_id ? `https://www.xiaohongshu.com/explore/${nc.note_id}` : '',
-            });
-          }
+          const nc = n.note_card || n;
+          const noteId = nc.note_id || n.id || '';
+          if (!noteId || seen.has(noteId)) continue;
+          seen.add(noteId);
+          const cover = nc.cover?.url || nc.cover?.info_list?.[0]?.url || '';
+          items.push({
+            imageUrl: cover ? String(cover).replace(/^http:\/\//, 'https://') : '',
+            title: nc.display_title || nc.title || '',
+            noteId,
+            author: nc.user?.nickname || '',
+            sourceUrl: `https://www.xiaohongshu.com/explore/${noteId}`,
+            type: nc.type || 'normal',
+          });
         }
       } catch {}
     }
   });
   try {
-    await p.goto(`https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent(keyword)}&source=web_search_result_notes`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await p.waitForTimeout(4000);
-    // 滚动加载
-    for (let i = 0; i < 5 && items.length < limit; i++) {
-      await p.evaluate(() => window.scrollBy(0, 800));
-      await p.waitForTimeout(2000);
+    // 先访问首页预热 cookie
+    await p.goto('https://www.xiaohongshu.com/', { waitUntil: 'networkidle', timeout: 30000 });
+    await p.waitForTimeout(2000);
+    // 搜索
+    await p.goto(`https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent(keyword)}&source=web_explore_feed`, { waitUntil: 'networkidle', timeout: 30000 });
+    await p.waitForTimeout(6000);
+    // 滚动翻页（限速 3-4 秒/页，防封）
+    const maxScrolls = Math.ceil(limit / 20) + 5;
+    for (let i = 0; i < maxScrolls && items.length < limit; i++) {
+      await p.evaluate(() => window.scrollBy(0, 1200));
+      await p.waitForTimeout(3000 + Math.random() * 1000); // 3-4 秒随机间隔
     }
-  } catch {
-    // 搜索页可能需要登录，返回已收集的
-  } finally {
-    await b.close();
-  }
+  } catch {}
+  await b.close();
+  console.log(`[xhs] 搜索 "${keyword}": ${items.length} 条`);
   return items.slice(0, limit);
 }
