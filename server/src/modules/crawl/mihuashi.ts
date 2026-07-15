@@ -1,12 +1,25 @@
 // 米画师画风采集（playwright 驱动真实页面绕过签名）
 // 打开 /artworks → 点画风标签 → 滚动加载 → 拦截 search API 收集作品图
-import { chromium } from 'playwright';
+// 注意：米画师靠 navigator.webdriver + HeadlessChrome 特征识别自动化，识破后 search 接口
+// 返回假的"签名错误"403。必须用反检测参数 + 抹掉 webdriver 标志才能过。
+import { chromium, type Browser, type BrowserContext } from 'playwright';
 
 export type MhsArtwork = { mhsId: number; imageUrl: string; width: number | null; height: number | null };
 
+const STEALTH_ARGS = ['--disable-blink-features=AutomationControlled'];
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+// 建带反检测的 context：去掉 HeadlessChrome 特征与 navigator.webdriver
+async function stealthContext(b: Browser): Promise<BrowserContext> {
+  const ctx = await b.newContext({ userAgent: UA, locale: 'zh-CN' });
+  await ctx.addInitScript(() => { Object.defineProperty(navigator, 'webdriver', { get: () => undefined }); });
+  return ctx;
+}
+
 export async function searchMihuashi(tagName: string, limit = 30): Promise<MhsArtwork[]> {
-  const b = await chromium.launch({ headless: true });
-  const p = await b.newPage();
+  const b = await chromium.launch({ headless: true, args: STEALTH_ARGS });
+  const ctx = await stealthContext(b);
+  const p = await ctx.newPage();
   const arts: MhsArtwork[] = [];
   const seen = new Set<number>();
   p.on('response', async r => {
@@ -42,8 +55,9 @@ export async function searchMihuashi(tagName: string, limit = 30): Promise<MhsAr
 
 // 拉米画师可用画风标签（供前端下拉）
 export async function fetchMihuashiTags(): Promise<{ id: number; name: string; type: string }[]> {
-  const b = await chromium.launch({ headless: true });
-  const p = await b.newPage();
+  const b = await chromium.launch({ headless: true, args: STEALTH_ARGS });
+  const ctx = await stealthContext(b);
+  const p = await ctx.newPage();
   let tags: any[] = [];
   p.on('response', async r => {
     if (r.url().includes('/api/v1/configure/artwork_tags')) {
