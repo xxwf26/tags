@@ -9,6 +9,7 @@ import { searchWeiboByKeyword } from '../crawl/weibo.js';
 import { searchBaiduImages } from '../crawl/baidu.js';
 import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
 import { logOperation } from '../operation/op.js';
+import { loadTaxonomy, extractJson, normalizeOutput, callBoth } from '../tagging/ai.js';
 
 export class SearchService {
   // 发起搜索：创建 session → 各平台搜索 → 存结果 → 标记 isNew
@@ -87,19 +88,55 @@ export class SearchService {
           if (!xhsCookie) { console.error('[search] 小红书: 未配置 XHS_COOKIE，跳过'); }
           else {
             const keywords = searchKeywords.length ? searchKeywords : ['插画'];
+            // 加载标签词表（AI 判断用）
+            const tax = await loadTaxonomy();
             for (const kw of keywords) {
               const notes = await searchXhsByKeyword(kw, 100, xhsCookie);
-              console.log(`[search] 小红书 "${kw}": ${notes.length} 帖`);
+              console.log(`[search] 小红书 "${kw}": ${notes.length} 帖，开始 AI 筛选...`);
+              let kept = 0, skipped = 0;
               for (const n of notes) {
-                items.push({
-                  imageUrl: n.images[0] || '',  // 首图作缩略图
-                  title: n.title || kw,
-                  author: n.author || null,
-                  sourceUrl: n.sourceUrl,
-                  tags: n.xhsTags || [],  // 帖子自带标签（非搜索关键词）
-                  allImages: n.images,    // 所有图片
-                } as any);
+                if (!n.images.length) { skipped++; continue; }
+                // AI 判断首图是否绘画作品（能打出 genre 画风标签 = 是作品）
+                let isArtwork = false;
+                let aiTags: any[] = [];
+                try {
+                  const { buf } = await downloadImage(n.images[0]);
+                  const b64 = buf.toString('base64');
+                  const mime = 'image/jpeg';
+                  const { gemini, doubao } = await callBoth(b64, mime, tax.prompt);
+                  const gIds = normalizeOutput(extractJson(gemini), tax.labelMap);
+                  const dIds = normalizeOutput(extractJson(doubao), tax.labelMap);
+                  const allIds = new Set([...gIds, ...dIds]);
+                  // 能打出 genre 画风的 = 绘画作品
+                  const tagRows = allIds.size ? await db.select().from(schema.tags).where(inArray(schema.tags.id, [...allIds])) : [];
+                  const dims = await db.select().from(schema.tagDimensions);
+                  const dimById = new Map(dims.map(d => [d.id, d]));
+                  const rootCodeOf = (dimId: number): string => {
+                    let d = dimById.get(dimId), cur = dimId;
+                    while (d && d.parentId) { cur = d.parentId; d = dimById.get(cur); }
+                    return d?.code ?? '';
+                  };
+                  aiTags = tagRows.map(t => ({ tagId: t.id, label: t.label, dimensionId: t.dimensionId, rootCode: rootCodeOf(t.dimensionId) }));
+                  isArtwork = aiTags.some(t => t.rootCode === 'genre');
+                } catch (e: any) {
+                  console.error(`[search] AI判断失败 "${n.title?.slice(0, 20)}": ${e.message}`);
+                }
+                if (isArtwork) {
+                  kept++;
+                  items.push({
+                    imageUrl: n.images[0] || '',
+                    title: n.title || kw,
+                    author: n.author || null,
+                    sourceUrl: n.sourceUrl,
+                    tags: n.xhsTags || [],
+                    allImages: n.images,
+                    aiTags,
+                  } as any);
+                } else {
+                  skipped++;
+                }
               }
+              console.log(`[search] 小红书 "${kw}" AI筛选: 保留 ${kept}，丢弃 ${skipped}（非绘画作品）`);
             }
           }
         } else if (platform === 'weibo') {
@@ -130,6 +167,7 @@ export class SearchService {
           sourceUrl: item.sourceUrl || null,
           imageUrl: item.imageUrl || null,
           allImages: (item as any).allImages || null,
+          aiTags: (item as any).aiTags || null,
           title: item.title || null,
           author: item.author || null,
           tags: item.tags || [],
