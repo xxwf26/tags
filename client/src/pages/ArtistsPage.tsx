@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
-import { useArtists } from '../hooks';
-import type { Artist } from '../api';
+import { useArtists, useTags } from '../hooks';
+import { FilterBar } from '../components/FilterBar';
+import type { Artist, TagNode } from '../api';
 
 const ENGAGE: Record<string, string> = {
   cooperated: '合作', pending: '待定', rejected: '不合作',
@@ -13,7 +14,7 @@ const ENGAGE_CLS: Record<string, string> = {
   unreachable: 'text-stone-500 bg-stone-200', contacted: 'text-violet-700 bg-violet-100',
   negotiating: 'text-violet-700 bg-violet-100',
 };
-const PLATFORM_LABEL: Record<string, string> = { xiaohongshu: '小红书', mihuashi: '米画师', weibo: '微博', other: '其他' };
+const PLATFORM_LABEL: Record<string, string> = { xiaohongshu: '小红书', mihuashi: '米画师', weibo: '微博', manual: '手动', other: '其他' };
 const ENGAGE_ORDER = ['pending', 'cooperated', 'contacted', 'negotiating', 'no_availability', 'rejected', 'unreachable'];
 // 头像渐变（按名字散列取色）
 const AVATAR_GRADS = [
@@ -81,56 +82,75 @@ function ArtistCard({ a }: { a: Artist }) {
 
 export function ArtistsPage() {
   const artistsQ = useArtists();
+  const tagsQ = useTags();
   const [engage, setEngage] = useState('全部');
   const [platform, setPlatform] = useState('全部');
-  const [style, setStyle] = useState('全部');
+  const [orient, setOrient] = useState('全部');
+  const [selected, setSelected] = useState<Set<number>>(new Set());
   const [kw, setKw] = useState('');
 
   const all = artistsQ.data ?? [];
+  const tree = tagsQ.data ?? [];
 
-  const styleOptions = useMemo(() => {
-    const s = new Set<string>();
-    for (const a of all) (a.styleHint ?? []).forEach(g => s.add(g));
-    return [...s];
-  }, [all]);
+  // tagId -> 顶层维度 code（用于按维度交叉筛选）
+  const tagRoot = useMemo(() => {
+    const m = new Map<number, string>();
+    const walk = (top: TagNode) => {
+      for (const t of top.tags) m.set(t.id, top.code || '');
+      top.children.forEach(walk);
+    };
+    tree.forEach(walk);
+    return m;
+  }, [tree]);
+  // 选中的标签按顶层维度分组
+  const selByRoot = useMemo(() => {
+    const m = new Map<string, Set<number>>();
+    for (const id of selected) { const r = tagRoot.get(id); if (!r) continue; const s = m.get(r) ?? new Set<number>(); s.add(id); m.set(r, s); }
+    return m;
+  }, [selected, tagRoot]);
+
+  const toggleTag = (id: number) => { const s = new Set(selected); s.has(id) ? s.delete(id) : s.add(id); setSelected(s); };
 
   const list = useMemo(() => all.filter(a => {
     if (engage !== '全部' && a.engageStatus !== engage) return false;
-    if (platform !== '全部' && !platformsOf(a).includes(platform)) return false;
-    if (style !== '全部' && !(a.styleHint ?? []).includes(style)) return false;
+    if (platform !== '全部' && !(a.platforms ?? platformsOf(a)).includes(platform)) return false;
+    if (orient !== '全部' && !(a.orientations ?? []).includes(orient)) return false;
     if (kw && !a.name.toLowerCase().includes(kw.toLowerCase())) return false;
+    // 标签：跨维度与、同维度或（按作品标签并集）
+    for (const [, sel] of selByRoot) {
+      if (!(a.tags ?? []).some(t => sel.has(t.id))) return false;
+    }
     return true;
-  }), [all, engage, platform, style, kw]);
+  }), [all, engage, platform, orient, kw, selByRoot]);
 
   // 有作品的排前面（视觉更饱满）
   const sorted = useMemo(() => [...list].sort((a, b) => (b.total > 0 ? 1 : 0) - (a.total > 0 ? 1 : 0)), [list]);
 
-  const hasFilter = engage !== '全部' || platform !== '全部' || style !== '全部' || !!kw;
-  const clear = () => { setEngage('全部'); setPlatform('全部'); setStyle('全部'); setKw(''); };
+  const hasFilter = engage !== '全部' || platform !== '全部' || orient !== '全部' || selected.size > 0 || !!kw;
+  const clear = () => { setEngage('全部'); setPlatform('全部'); setOrient('全部'); setSelected(new Set()); setKw(''); };
   const withWorks = all.filter(a => a.total > 0).length;
 
   return (
     <div className="max-w-[1600px] mx-auto px-3 md:px-6 py-3">
       {/* 筛选条 */}
-      <div className="bg-white rounded-2xl p-3 border border-stone-100 sticky top-14 z-20 space-y-2 shadow-sm">
-        <div className="flex items-center gap-2 flex-wrap">
+      <div className="mb-2.5 sticky top-14 z-20 space-y-2">
+        {tagsQ.data && (
+          <FilterBar tree={tagsQ.data} orient={orient} setOrient={setOrient} selected={selected} toggleTag={toggleTag} onClear={() => setSelected(new Set())} />
+        )}
+        <div className="bg-white rounded-2xl p-3 border border-stone-100 flex items-center gap-2 flex-wrap shadow-sm">
           <div className="relative">
             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-300 text-[13px]">🔍</span>
             <input value={kw} onChange={e => setKw(e.target.value)} placeholder="搜画师名称"
-              className="text-[13px] bg-stone-100 rounded-full pl-8 pr-3.5 py-1.5 w-48 focus:outline-none focus:bg-stone-200/60" />
+              className="text-[13px] bg-stone-100 rounded-full pl-8 pr-3.5 py-1.5 w-44 focus:outline-none focus:bg-stone-200/60" />
           </div>
           <span className="text-stone-200">|</span>
           <span className="text-[11px] text-stone-400 shrink-0">建联</span>
           <Chip active={engage === '全部'} onClick={() => setEngage('全部')}>全部</Chip>
           {ENGAGE_ORDER.map(s => <Chip key={s} active={engage === s} onClick={() => setEngage(s)}>{ENGAGE[s]}</Chip>)}
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-[11px] text-stone-400 shrink-0 w-8 md:w-auto">平台</span>
+          <span className="text-stone-200">|</span>
+          <span className="text-[11px] text-stone-400 shrink-0">平台</span>
           <Chip active={platform === '全部'} onClick={() => setPlatform('全部')}>全部</Chip>
-          {['xiaohongshu', 'mihuashi', 'weibo'].map(p => <Chip key={p} active={platform === p} onClick={() => setPlatform(p)}>{PLATFORM_LABEL[p]}</Chip>)}
-          {styleOptions.length > 0 && <><span className="text-stone-200 mx-1">|</span><span className="text-[11px] text-stone-400 shrink-0">画风</span>
-            <Chip active={style === '全部'} onClick={() => setStyle('全部')}>全部</Chip>
-            {styleOptions.map(s => <Chip key={s} active={style === s} onClick={() => setStyle(s)}>{s}</Chip>)}</>}
+          {['xiaohongshu', 'mihuashi', 'weibo', 'manual'].map(p => <Chip key={p} active={platform === p} onClick={() => setPlatform(p)}>{PLATFORM_LABEL[p] || p}</Chip>)}
         </div>
       </div>
 

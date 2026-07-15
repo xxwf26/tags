@@ -7,24 +7,53 @@ import { logOperation } from '../operation/op.js';
 export class ArtistService {
   async list() {
     const artists = await db.select().from(schema.artists);
-    // 批量取每人作品封面（一次查全部作品，按画师归组，各取前 4 张）—— 避免 N+1
+    // 批量取每人作品（一次查全部，按画师归组）：封面/计数/平台来源/朝向
     const allWorks = await db.select({
       id: schema.artworks.id, artistId: schema.artworks.artistId,
       thumbUrl: schema.artworks.thumbUrl, imageUrl: schema.artworks.imageUrl,
+      sourcePlatform: schema.artworks.sourcePlatform, orientation: schema.artworks.orientation,
     }).from(schema.artworks).where(isNull(schema.artworks.deletedAt)).orderBy(desc(schema.artworks.id));
     const coversByArtist = new Map<number, string[]>();
     const countByArtist = new Map<number, number>();
+    const platformsByArtist = new Map<number, Set<string>>();
+    const orientsByArtist = new Map<number, Set<string>>();
+    const artistOf = new Map<number, number>(); // workId -> artistId
     for (const w of allWorks) {
       if (w.artistId == null) continue;
       countByArtist.set(w.artistId, (countByArtist.get(w.artistId) ?? 0) + 1);
       const arr = coversByArtist.get(w.artistId) ?? [];
       if (arr.length < 4) arr.push(w.thumbUrl || w.imageUrl);
       coversByArtist.set(w.artistId, arr);
+      if (w.sourcePlatform) {
+        let s = platformsByArtist.get(w.artistId); if (!s) { s = new Set<string>(); platformsByArtist.set(w.artistId, s); }
+        s.add(w.sourcePlatform);
+      }
+      if (w.orientation) {
+        let s = orientsByArtist.get(w.artistId); if (!s) { s = new Set<string>(); orientsByArtist.set(w.artistId, s); }
+        s.add(w.orientation);
+      }
+      artistOf.set(w.id, w.artistId);
+    }
+    // 作品标签并集（按画师归组）
+    const workIds = allWorks.map(w => w.id);
+    const ats = workIds.length ? await db.select().from(schema.artworkTags).where(inArray(schema.artworkTags.artworkId, workIds)) : [];
+    const tagIds = [...new Set(ats.map(a => a.tagId))];
+    const tagRows = tagIds.length ? await db.select().from(schema.tags).where(inArray(schema.tags.id, tagIds)) : [];
+    const tagById = new Map(tagRows.map(t => [t.id, t]));
+    const tagsByArtist = new Map<number, Set<number>>();
+    for (const at of ats) {
+      const aid = artistOf.get(at.artworkId);
+      if (aid == null) continue;
+      const s = tagsByArtist.get(aid) ?? new Set<number>();
+      s.add(at.tagId); tagsByArtist.set(aid, s);
     }
     return artists.map(a => ({
       ...a,
       total: countByArtist.get(a.id) ?? 0,
       coverThumbs: coversByArtist.get(a.id) ?? [],
+      platforms: [...(platformsByArtist.get(a.id) ?? [])],
+      orientations: [...(orientsByArtist.get(a.id) ?? [])],
+      tags: [...(tagsByArtist.get(a.id) ?? [])].map(id => ({ id, label: tagById.get(id)?.label ?? '', dimensionId: tagById.get(id)?.dimensionId ?? null })),
     }));
   }
 

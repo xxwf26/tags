@@ -17,6 +17,7 @@ export type Artist = {
   links: any; drawingHabit: any; engageNote?: string | null; styleHint?: string[] | null;
   total: number; styleDist?: StyleDistItem[]; styleCount?: number; topStyle?: string | null; missingStyles?: string[];
   coverThumbs?: string[];
+  tags?: ArtworkTag[]; platforms?: string[]; orientations?: string[];
 };
 
 const BASE = '/api';
