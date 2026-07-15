@@ -47,7 +47,7 @@ export function Viewer({ list, index, onClose, onNav, onTag, onConfirm, tagging,
   const byDim = tagsByTopDim(tagTree ?? []);
 
   const del = () => {
-    if (confirm(`确认删除作品「${w.title || '未命名'}」？图片会一并删除，不可恢复。`)) {
+    if (confirm(`确认删除作品「${w.title || '未命名'}」？删除后可在「管理」页撤销恢复。`)) {
       onDelete?.(w.id);
       onClose();
     }
@@ -59,11 +59,11 @@ export function Viewer({ list, index, onClose, onNav, onTag, onConfirm, tagging,
         <span className="truncate">{w.artistName || '未知画师'} · {w.tags[0]?.label || ''}</span>
         <span className="shrink-0 ml-2">{i + 1}/{list.length} · ←/→ 翻图 · ESC · 点空白关闭</span>
       </div>
-      {/* 内容区：点击空白关闭；内部图片/面板阻止冒泡 */}
-      <div className="flex-1 flex items-center justify-center p-3 md:p-6 overflow-auto" onClick={onClose}>
-        <div className="flex flex-col md:flex-row items-center md:items-start gap-4 md:gap-6 max-w-5xl w-full" onClick={e => e.stopPropagation()}>
+      {/* 内容区：点击空白关闭；内部图片/面板阻止冒泡。overflow-y-auto+my-auto：短居中、长图从顶滚动不截断 */}
+      <div className="flex-1 overflow-y-auto flex justify-center p-3 md:p-6" onClick={onClose}>
+        <div className="my-auto flex flex-col md:flex-row items-center md:items-start gap-4 md:gap-6 max-w-5xl" onClick={e => e.stopPropagation()}>
           <div className="relative shrink-0 flex items-center justify-center">
-            <img src={w.imageUrl} alt={w.title || ''} className="max-h-[72vh] max-w-full rounded-xl object-contain shadow-2xl" />
+            <img src={w.imageUrl} alt={w.title || ''} className="max-h-[70vh] max-w-full md:max-w-[58vw] rounded-xl object-contain shadow-2xl" />
             <button className="absolute left-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/45 text-white text-xl hover:bg-xhs" onClick={e => { e.stopPropagation(); onNav(-1); }}>‹</button>
             <button className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/45 text-white text-xl hover:bg-xhs" onClick={e => { e.stopPropagation(); onNav(1); }}>›</button>
           </div>
