@@ -42,7 +42,7 @@ export function SearchPage() {
     upload.mutate(f, { onSuccess: (r) => {
       setSelectedRef(r.id);
       const modes: Record<number, 'must' | 'fuzzy'> = {};
-      (r.aiTags ?? []).forEach(t => { modes[t.tagId] = t.confidence >= 0.9 ? 'must' : 'fuzzy'; });
+      (r.aiTags ?? []).forEach(t => { modes[t.tagId] = 'fuzzy'; });
       setTagModes(modes);
     } });
   }, [upload]);
@@ -64,14 +64,14 @@ export function SearchPage() {
   useEffect(() => {
     if (ref) {
       const modes: Record<number, 'must' | 'fuzzy'> = {};
-      (ref.manualTags ?? ref.aiTags ?? []).forEach(t => { modes[t.tagId] = 'must'; });
+      (ref.manualTags ?? ref.aiTags ?? []).forEach(t => { modes[t.tagId] = 'fuzzy'; });
       setTagModes(modes);
     }
   }, [selectedRef]);
 
   const toggleTag = (id: number) => {
     const m = { ...tagModes };
-    if (m[id]) delete m[id]; else m[id] = 'must';
+    if (m[id]) delete m[id]; else m[id] = 'fuzzy';
     setTagModes(m);
   };
   const toggleMode = (id: number) => {
@@ -111,14 +111,14 @@ export function SearchPage() {
         {(refsQ.data ?? []).length > 0 && (
           <div className="flex gap-2 mt-3 flex-wrap">
             {(refsQ.data ?? []).map(r => (
-              <div key={r.id} className="relative group">
+              <div key={r.id} className="relative">
                 <button onClick={() => { setSelectedRef(r.id); setActiveSession(null); }}
                   className={`block w-16 h-16 rounded-lg overflow-hidden border-2 ${selectedRef === r.id ? 'border-xhs' : 'border-stone-200'}`}>
                   <img src={r.imageUrl} className="w-full h-full object-cover" alt="" />
                 </button>
                 <span className="absolute -bottom-1 -right-1 text-[9px] bg-stone-700 text-white rounded-full px-1.5 py-0.5">{r.status === 'tagging' ? '⏳' : '✓'}</span>
-                <button onClick={() => { if (confirm('删除此参考图及其所有搜索记录？')) { deleteRef.mutate(r.id); if (selectedRef === r.id) { setSelectedRef(null); setActiveSession(null); } } }}
-                  className="absolute -top-1.5 -left-1.5 w-5 h-5 rounded-full bg-rose-500 text-white text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity" title="删除参考图">×</button>
+                <button onClick={(e) => { e.stopPropagation(); if (confirm('删除此参考图及其所有搜索记录？')) { deleteRef.mutate(r.id); if (selectedRef === r.id) { setSelectedRef(null); setActiveSession(null); } } }}
+                  className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-rose-500 text-white text-sm flex items-center justify-center shadow-md hover:bg-rose-600" title="删除参考图">×</button>
               </div>
             ))}
           </div>

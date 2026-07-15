@@ -251,13 +251,3 @@ export async function fetchReferenceDetail(id: number) {
   if (!r.ok) throw new Error('detail failed');
   return r.json();
 }
-export async function deleteReference(id: number) {
-  const r = await fetch(BASE + '/reference/' + id, { method: 'DELETE' });
-  if (!r.ok) throw new Error('delete ref failed');
-  return r.json();
-}
-export async function fetchReferenceDetail(id: number) {
-  const r = await fetch(BASE + '/reference/' + id + '/detail');
-  if (!r.ok) throw new Error('detail failed');
-  return r.json();
-}
