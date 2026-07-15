@@ -6,6 +6,7 @@ import { ArtistPage } from './pages/ArtistPage';
 import { DiscoverPage } from './pages/DiscoverPage';
 import { ConfigPage } from './pages/ConfigPage';
 import { AdminPage } from './pages/AdminPage';
+import { SearchPage } from './pages/SearchPage';
 import { EntryDialog } from './components/EntryDialog';
 import { ImageSearchDialog } from './components/ImageSearchDialog';
 import { BackToTop } from './components/BackToTop';
@@ -30,6 +31,7 @@ function NavBar({ kw, setKw }: { kw: string; setKw: (s: string) => void }) {
             <Link to="/" className={`px-2 md:px-2.5 py-1 rounded-full ${loc.pathname === '/' ? 'text-xhs font-medium' : 'text-stone-500'}`}>画师库</Link>
             <Link to="/gallery" className={`px-2 md:px-2.5 py-1 rounded-full ${loc.pathname === '/gallery' ? 'text-xhs font-medium' : 'text-stone-500'}`}>画廊</Link>
             <Link to="/discover" className={`px-2 md:px-2.5 py-1 rounded-full ${loc.pathname === '/discover' ? 'text-xhs font-medium' : 'text-stone-500'}`}>发现</Link>
+            <Link to="/search" className={`px-2 md:px-2.5 py-1 rounded-full ${loc.pathname === '/search' ? 'text-xhs font-medium' : 'text-stone-500'}`}>寻源</Link>
             <Link to="/config" className={`px-2 md:px-2.5 py-1 rounded-full ${loc.pathname === '/config' ? 'text-xhs font-medium' : 'text-stone-500'}`}>配置</Link>
             <Link to="/admin" className={`px-2 md:px-2.5 py-1 rounded-full ${loc.pathname === '/admin' ? 'text-xhs font-medium' : 'text-stone-500'}`}>管理</Link>
           </nav>
@@ -60,6 +62,7 @@ export default function App() {
             <Route path="/discover" element={<DiscoverPage />} />
             <Route path="/config" element={<ConfigPage />} />
             <Route path="/admin" element={<AdminPage />} />
+          <Route path="/search" element={<SearchPage />} />
             <Route path="/artist/:id" element={<ArtistPage />} />
           </Routes>
         </main>

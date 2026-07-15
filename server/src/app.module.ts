@@ -5,8 +5,10 @@ import { ArtistModule } from './modules/artist/artist.module.js';
 import { TaggingModule } from './modules/tagging/tagging.module.js';
 import { CandidateModule } from './modules/candidate/candidate.module.js';
 import { OperationModule } from './modules/operation/operation.module.js';
+import { ReferenceModule } from './modules/reference/reference.module.js';
+import { SearchModule } from './modules/search/search.module.js';
 
 @Module({
-  imports: [TagModule, ArtworkModule, ArtistModule, TaggingModule, CandidateModule, OperationModule],
+  imports: [TagModule, ArtworkModule, ArtistModule, TaggingModule, CandidateModule, OperationModule, ReferenceModule, SearchModule],
 })
 export class AppModule {}

@@ -187,3 +187,57 @@ export async function redoOperation(id: number) {
   if (!r.ok) throw new Error('redo failed');
   return r.json();
 }
+
+// ============ 寻源功能 ============
+export type ReferenceImage = {
+  id: number; imageUrl: string; imageHash: string | null; width: number | null; height: number | null;
+  aiTags: { tagId: number; label: string; dimensionId: number | null; confidence: number }[] | null;
+  manualTags: { tagId: number; label: string; dimensionId: number | null }[] | null;
+  status: string; createdAt: string;
+};
+export type SearchSession = {
+  id: number; referenceImageId: number; parentSessionId: number | null;
+  searchTags: any; platforms: string[]; status: string; resultCount: number; newCount: number; createdAt: string;
+};
+export type SearchResult = {
+  id: number; sessionId: number; referenceImageId: number; platform: string;
+  sourceUrl: string | null; imageUrl: string | null; title: string | null; author: string | null;
+  tags: string[]; aiTags: any; imageHash: string | null; isNew: number;
+  tier: 'tier1' | 'tier2' | 'promoted' | 'rejected'; promotedArtworkId: number | null; createdAt: string;
+};
+export async function uploadReference(file: File): Promise<ReferenceImage> {
+  const fd = new FormData(); fd.append('file', file);
+  const r = await fetch(BASE + '/reference/upload', { method: 'POST', body: fd });
+  if (!r.ok) throw new Error('upload failed');
+  return r.json();
+}
+export async function fetchReferences(): Promise<ReferenceImage[]> {
+  const r = await fetch(BASE + '/reference'); if (!r.ok) throw new Error('ref failed'); return r.json();
+}
+export async function fetchReference(id: number): Promise<ReferenceImage> {
+  const r = await fetch(BASE + '/reference/' + id); if (!r.ok) throw new Error('ref failed'); return r.json();
+}
+export async function updateReferenceTags(id: number, manualTags: any[]) {
+  const r = await fetch(BASE + '/reference/' + id + '/tags', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ manualTags }) });
+  if (!r.ok) throw new Error('update tags failed'); return r.json();
+}
+export async function startSearch(body: { referenceId: number; tags: any[]; platforms?: string[] }) {
+  const r = await fetch(BASE + '/search/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error('search failed'); return r.json();
+}
+export async function fetchSearchSessions(referenceId: number): Promise<SearchSession[]> {
+  const r = await fetch(BASE + '/search/sessions?referenceId=' + referenceId); if (!r.ok) throw new Error('sessions failed'); return r.json();
+}
+export async function fetchSearchResults(sessionId: number, tier?: string): Promise<SearchResult[]> {
+  const q = tier ? '&tier=' + tier : '';
+  const r = await fetch(BASE + '/search/results?sessionId=' + sessionId + q); if (!r.ok) throw new Error('results failed'); return r.json();
+}
+export async function reviewSearchResult(id: number) {
+  const r = await fetch(BASE + '/search/results/' + id + '/review', { method: 'POST' }); if (!r.ok) throw new Error('review failed'); return r.json();
+}
+export async function promoteSearchResult(id: number) {
+  const r = await fetch(BASE + '/search/results/' + id + '/promote', { method: 'POST' }); if (!r.ok) throw new Error('promote failed'); return r.json();
+}
+export async function rejectSearchResult(id: number) {
+  const r = await fetch(BASE + '/search/results/' + id + '/reject', { method: 'POST' }); if (!r.ok) throw new Error('reject failed'); return r.json();
+}

@@ -115,4 +115,59 @@ export const candidates = mysqlTable('candidates', {
 export type Artist = typeof artists.$inferSelect;
 export type Artwork = typeof artworks.$inferSelect;
 export type Tag = typeof tags.$inferSelect;
+
+// ============ 寻源功能（参考图 → AI打标 → 按标签搜索 → 三级库） ============
+
+// 参考图：上传的参考图 + AI/人工标签
+export const referenceImages = mysqlTable('reference_images', {
+  id: bigint('id', { mode: 'number' }).autoincrement().primaryKey(),
+  imageUrl: varchar('image_url', { length: 512 }).notNull(),
+  imageHash: char('image_hash', { length: 16 }),
+  width: int('width'), height: int('height'),
+  aiTags: json('ai_tags'),                        // AI 自动打的 [{tagId, label, dimensionId, confidence}]
+  manualTags: json('manual_tags'),                // 人工调整后的 [{tagId, label, dimensionId}]
+  status: mysqlEnum('status', ['tagging', 'ready', 'searching']).default('tagging'),
+  createdAt: datetime('created_at').default(sql`now()`),
+}, (t) => ({
+  statusIdx: index('idx_ref_status').on(t.status),
+}));
+
+// 搜索会话：每次搜索 = 一个 session（不覆盖，迭代链）
+export const searchSessions = mysqlTable('search_sessions', {
+  id: bigint('id', { mode: 'number' }).autoincrement().primaryKey(),
+  referenceImageId: bigint('reference_image_id', { mode: 'number' }).notNull(),
+  parentSessionId: bigint('parent_session_id', { mode: 'number' }),  // 上一次 session（迭代链）
+  searchTags: json('search_tags'),                // 本次搜索标签快照 [{tagId, label, dimensionId}]
+  platforms: json('platforms'),                   // ["mihuashi","xiaohongshu","weibo"]
+  status: mysqlEnum('status', ['running', 'ok', 'failed']).default('running'),
+  resultCount: int('result_count').default(0),
+  newCount: int('new_count').default(0),          // vs 上一次 session 新增的
+  createdAt: datetime('created_at').default(sql`now()`),
+}, (t) => ({
+  refIdx: index('idx_session_ref').on(t.referenceImageId),
+}));
+
+// 搜索结果：每张找到的画
+export const searchResults = mysqlTable('search_results', {
+  id: bigint('id', { mode: 'number' }).autoincrement().primaryKey(),
+  sessionId: bigint('session_id', { mode: 'number' }).notNull(),
+  referenceImageId: bigint('reference_image_id', { mode: 'number' }).notNull(),
+  platform: varchar('platform', { length: 32 }),   // xiaohongshu/mihuashi/weibo
+  sourceUrl: varchar('source_url', { length: 512 }),
+  imageUrl: varchar('image_url', { length: 512 }),  // 外链（不落盘直到 promote）
+  title: varchar('title', { length: 255 }),
+  author: varchar('author', { length: 128 }),
+  authorUrl: varchar('author_url', { length: 512 }),
+  tags: json('tags'),                              // 平台自带标签
+  aiTags: json('ai_tags'),                         // AI 给这张图打的标签（可选）
+  imageHash: char('image_hash', { length: 16 }),
+  isNew: tinyint('is_new').default(1),             // vs 上一次 session 是否新增
+  tier: mysqlEnum('tier', ['tier1', 'tier2', 'promoted', 'rejected']).default('tier1'),
+  promotedArtworkId: bigint('promoted_artwork_id', { mode: 'number' }),
+  createdAt: datetime('created_at').default(sql`now()`),
+}, (t) => ({
+  sessionIdx: index('idx_result_session').on(t.sessionId),
+  refIdx: index('idx_result_ref').on(t.referenceImageId),
+  tierIdx: index('idx_result_tier').on(t.tier),
+}));
 export type TagDimension = typeof tagDimensions.$inferSelect;

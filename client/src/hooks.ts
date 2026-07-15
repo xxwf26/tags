@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchTags, fetchTagsAll, fetchArtworks, fetchArtists, fetchArtist, createArtwork, deleteArtwork, setArtworkTags, updateEngage, tagArtwork, tagBatch, confirmArtwork, crawlNote, fetchCandidates, promoteCandidate, rejectCandidate, searchByImage, createTag, updateTag, deleteTag, createDimension, crawlMihuashi, fetchMihuashiTags, fetchOperations, undoOperation, redoOperation, type Artwork, type Artist } from './api';
+import { fetchTags, fetchTagsAll, fetchArtworks, fetchArtists, fetchArtist, createArtwork, deleteArtwork, setArtworkTags, updateEngage, tagArtwork, tagBatch, confirmArtwork, crawlNote, fetchCandidates, promoteCandidate, rejectCandidate, searchByImage, createTag, updateTag, deleteTag, createDimension, crawlMihuashi, fetchMihuashiTags, fetchOperations, undoOperation, redoOperation, type Artwork, type Artist , uploadReference, fetchReferences, updateReferenceTags, startSearch, fetchSearchSessions, fetchSearchResults, reviewSearchResult, promoteSearchResult, rejectSearchResult } from './api'
 
 export function useTags() {
   return useQuery({ queryKey: ['tags'], queryFn: fetchTags });
@@ -118,4 +118,45 @@ export function useRedoOperation() {
     mutationFn: (id: number) => redoOperation(id),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['operations'] }); qc.invalidateQueries({ queryKey: ['artworks'] }); qc.invalidateQueries({ queryKey: ['artists'] }); },
   });
+}
+
+// ============ 寻源功能 ============
+export function useReferences() {
+  return useQuery({ queryKey: ['references'], queryFn: fetchReferences });
+}
+export function useUploadReference() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (file: File) => uploadReference(file),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['references'] }) });
+}
+export function useUpdateReferenceTags() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: ({ id, manualTags }: { id: number; manualTags: any[] }) => updateReferenceTags(id, manualTags),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['references'] }) });
+}
+export function useStartSearch() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: startSearch,
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['search-sessions'] }); qc.invalidateQueries({ queryKey: ['search-results'] }); } });
+}
+export function useSearchSessions(referenceId: number) {
+  return useQuery({ queryKey: ['search-sessions', referenceId], queryFn: () => fetchSearchSessions(referenceId), enabled: !!referenceId });
+}
+export function useSearchResults(sessionId: number, tier?: string) {
+  return useQuery({ queryKey: ['search-results', sessionId, tier], queryFn: () => fetchSearchResults(sessionId, tier), enabled: !!sessionId });
+}
+export function useReviewSearchResult() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (id: number) => reviewSearchResult(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['search-results'] }) });
+}
+export function usePromoteSearchResult() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (id: number) => promoteSearchResult(id),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['search-results'] }); qc.invalidateQueries({ queryKey: ['artworks'] }); qc.invalidateQueries({ queryKey: ['artists'] }); } });
+}
+export function useRejectSearchResult() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (id: number) => rejectSearchResult(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['search-results'] }) });
 }
