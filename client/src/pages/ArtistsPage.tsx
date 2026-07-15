@@ -1,5 +1,4 @@
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
 import { useArtists } from '../hooks';
 import type { Artist } from '../api';
 
@@ -45,7 +44,7 @@ function ArtistCard({ a }: { a: Artist }) {
   const styles = a.styleHint ?? [];
   const covers = a.coverThumbs ?? [];
   return (
-    <Link to={`/artist/${a.id}`} className="group bg-white rounded-2xl overflow-hidden border border-stone-100 card-hover block">
+    <a href={`/artist/${a.id}`} target="_blank" rel="noopener noreferrer" className="group bg-white rounded-2xl overflow-hidden border border-stone-100 card-hover block">
       {/* 作品预览区 */}
       {covers.length > 0 ? (
         <div className={`grid gap-0.5 aspect-[4/3] ${covers.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
@@ -76,7 +75,7 @@ function ArtistCard({ a }: { a: Artist }) {
           <span className="ml-auto text-stone-500 shrink-0">{a.total > 0 ? `${a.total} 作品` : '待采集'}</span>
         </div>
       </div>
-    </Link>
+    </a>
   );
 }
 
