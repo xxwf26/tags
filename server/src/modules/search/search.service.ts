@@ -10,18 +10,41 @@ import { logOperation } from '../operation/op.js';
 
 export class SearchService {
   // 发起搜索：创建 session → 各平台搜索 → 存结果 → 标记 isNew
-  async startSearch(body: { referenceId: number; tags: { tagId: number; label: string; dimensionId: number | null }[]; platforms?: string[] }) {
+  // tags 支持 mode: 'must'(必中，用作搜索关键词) | 'fuzzy'(模糊，达到比例即满足)
+  async startSearch(body: {
+    referenceId: number;
+    tags: { tagId: number; label: string; dimensionId: number | null; mode: 'must' | 'fuzzy' }[];
+    platforms?: string[]; fuzzyRatio?: number;
+  }) {
     const platforms = body.platforms ?? ['mihuashi'];
+    const fuzzyRatio = body.fuzzyRatio ?? 0.5;
+
+    // 加载维度表，解析每个标签的顶层 code（genre/technique/...）
+    const dims = await db.select().from(schema.tagDimensions);
+    const dimById = new Map(dims.map(d => [d.id, d]));
+    const rootCodeOf = (dimId: number | null): string => {
+      if (!dimId) return '';
+      let d = dimById.get(dimId), cur = dimId;
+      while (d && d.parentId) { cur = d.parentId; d = dimById.get(cur); }
+      return d?.code ?? '';
+    };
+
+    // 必中的 genre 画风标签 → 米画师搜索关键词
+    const mustGenreTags = body.tags.filter(t => t.mode === 'must' && rootCodeOf(t.dimensionId) === 'genre');
+    // 如果没有必中 genre，退而用所有 genre 标签（含模糊）
+    const allGenreTags = body.tags.filter(t => rootCodeOf(t.dimensionId) === 'genre');
+    const searchKeywords = (mustGenreTags.length ? mustGenreTags : allGenreTags).map(t => t.label);
+
     // 找上一次 session（迭代链）
     const prevSessions = await db.select().from(schema.searchSessions)
       .where(eq(schema.searchSessions.referenceImageId, body.referenceId)).orderBy(desc(schema.searchSessions.id));
     const prevSession = prevSessions[0]?.id ?? null;
 
-    // 创建新 session
+    // 创建新 session（存标签快照 + 模糊比例）
     const [sr] = await db.insert(schema.searchSessions).values({
       referenceImageId: body.referenceId,
       parentSessionId: prevSession,
-      searchTags: body.tags,
+      searchTags: { tags: body.tags, fuzzyRatio },
       platforms,
       status: 'running',
     });
@@ -33,33 +56,24 @@ export class SearchService {
     const prevHashes = new Set(prevResults.map(r => r.imageHash).filter(Boolean));
     const prevUrls = new Set(prevResults.map(r => r.sourceUrl).filter(Boolean));
 
-    // 提取搜索关键词（genre 画风的标签）
-    const genreTags = body.tags.filter(t => {
-      // genre 子维度的 tagId —— 简化：取 label 作为关键词
-      return t.label;
-    });
-    const keywords = genreTags.map(t => t.label);
-
     let totalResults = 0, newResults = 0;
-    const allResults: any[] = [];
 
     for (const platform of platforms) {
       let items: { imageUrl: string; title?: string | null; author?: string | null; sourceUrl?: string; tags?: string[] }[] = [];
       try {
         if (platform === 'mihuashi') {
-          // 米画师：按画风标签搜索（复用 searchMihuashi）
-          for (const kw of keywords.length ? keywords : ['日系']) {
+          // 米画师：按必中 genre 画风标签搜索（复用 searchMihuashi，共享浏览器单例）
+          const keywords = searchKeywords.length ? searchKeywords : ['日系'];
+          for (const kw of keywords) {
             const arts = await searchMihuashi(kw, 15);
             items.push(...arts.map(a => ({
               imageUrl: a.imageUrl, title: `米画师·${kw}`, author: null, sourceUrl: a.imageUrl, tags: [kw],
             })));
           }
         } else if (platform === 'xiaohongshu') {
-          // 小红书关键词搜索：需 cookie + x-s 签名，暂返回空
           // TODO: playwright 驱动搜索页（需 cookie）
         } else if (platform === 'weibo') {
-          // 微博关键词搜索：m.weibo.cn 搜索 API，暂返回空
-          // TODO: m.weibo.cn/api/container/getIndex?type=search
+          // TODO: m.weibo.cn 搜索 API
         }
       } catch (e) {
         // 单平台失败不影响其他
@@ -83,7 +97,6 @@ export class SearchService {
           isNew: isNew ? 1 : 0,
           tier: 'tier1',
         });
-        allResults.push({ id: (rr as any).insertId, isNew });
         totalResults++;
         if (isNew) newResults++;
       }

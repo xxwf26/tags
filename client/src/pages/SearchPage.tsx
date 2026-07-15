@@ -21,7 +21,8 @@ export function SearchPage() {
   const updateTags = useUpdateReferenceTags();
   const tagsQ = useTags();
   const [selectedRef, setSelectedRef] = useState<number | null>(null);
-  const [editTags, setEditTags] = useState<Set<number>>(new Set());
+  const [tagModes, setTagModes] = useState<Record<number, 'must' | 'fuzzy'>>({});
+  const [fuzzyRatio, setFuzzyRatio] = useState(0.5);
   const [searching, setSearching] = useState(false);
   const [activeSession, setActiveSession] = useState<number | null>(null);
 
@@ -37,7 +38,12 @@ export function SearchPage() {
 
   const loadFile = useCallback((f: File | null) => {
     if (!f) return;
-    upload.mutate(f, { onSuccess: (r) => { setSelectedRef(r.id); setEditTags(new Set((r.aiTags ?? []).map(t => t.tagId))); } });
+    upload.mutate(f, { onSuccess: (r) => {
+      setSelectedRef(r.id);
+      const modes: Record<number, 'must' | 'fuzzy'> = {};
+      (r.aiTags ?? []).forEach(t => { modes[t.tagId] = t.confidence >= 0.9 ? 'must' : 'fuzzy'; });
+      setTagModes(modes);
+    } });
   }, [upload]);
 
   // 粘贴上传
@@ -53,19 +59,36 @@ export function SearchPage() {
     return () => window.removeEventListener('paste', onPaste);
   }, [loadFile]);
 
-  // 选中参考图时初始化标签
+  // 选中参考图时初始化标签模式
   useEffect(() => {
-    if (ref) setEditTags(new Set((ref.manualTags ?? ref.aiTags ?? []).map(t => t.tagId)));
+    if (ref) {
+      const modes: Record<number, 'must' | 'fuzzy'> = {};
+      (ref.manualTags ?? ref.aiTags ?? []).forEach(t => { modes[t.tagId] = 'must'; });
+      setTagModes(modes);
+    }
   }, [selectedRef]);
 
-  const toggleTag = (id: number) => { const s = new Set(editTags); s.has(id) ? s.delete(id) : s.add(id); setEditTags(s); };
-  const saveTags = () => { if (selectedRef) updateTags.mutate({ id: selectedRef, manualTags: [...editTags].map(id => { const t = (ref?.aiTags ?? []).find(a => a.tagId === id); return { tagId: id, label: t?.label ?? '', dimensionId: t?.dimensionId ?? null }; }) }); };
+  const toggleTag = (id: number) => {
+    const m = { ...tagModes };
+    if (m[id]) delete m[id]; else m[id] = 'must';
+    setTagModes(m);
+  };
+  const toggleMode = (id: number) => {
+    const m = { ...tagModes };
+    if (m[id] === 'must') m[id] = 'fuzzy'; else m[id] = 'must';
+    setTagModes(m);
+  };
+  const selectedIds = Object.keys(tagModes).map(Number);
+  const saveTags = () => { if (selectedRef) updateTags.mutate({ id: selectedRef, manualTags: selectedIds.map(id => { const t = (ref?.aiTags ?? []).find(a => a.tagId === id); return { tagId: id, label: t?.label ?? '', dimensionId: t?.dimensionId ?? null }; }) }); };
 
   const doSearch = async () => {
     if (!selectedRef) return;
     setSearching(true);
-    const tags = [...editTags].map(id => { const t = (ref?.aiTags ?? []).find(a => a.tagId === id); return { tagId: id, label: t?.label ?? '', dimensionId: t?.dimensionId ?? null }; });
-    startSearchM.mutate({ referenceId: selectedRef, tags, platforms: ['mihuashi'] }, {
+    const tags = selectedIds.map(id => {
+      const t = (ref?.aiTags ?? []).find(a => a.tagId === id);
+      return { tagId: id, label: t?.label ?? '', dimensionId: t?.dimensionId ?? null, mode: tagModes[id] };
+    });
+    startSearchM.mutate({ referenceId: selectedRef, tags, platforms: ['mihuashi'], fuzzyRatio }, {
       onSuccess: (r) => { setActiveSession(r.sessionId); setSearching(false); },
       onError: () => setSearching(false),
     });
@@ -102,7 +125,7 @@ export function SearchPage() {
           <div className="flex gap-4">
             <img src={ref.imageUrl} className="w-32 h-32 object-cover rounded-xl shrink-0" alt="参考图" />
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-stone-700 mb-1">AI 标签（可调整）</div>
+              <div className="text-sm font-medium text-stone-700 mb-1">AI 标签（点击选/取消，再点切换必中/模糊）</div>
               <div className="space-y-1.5 max-h-40 overflow-auto">
                 {DIM_ROWS.map(row => {
                   const tags = byDim.get(row.code)?.tags ?? [];
@@ -111,16 +134,30 @@ export function SearchPage() {
                     <div key={row.code} className="flex items-start gap-2">
                       <span className="text-[11px] text-stone-400 w-14 shrink-0 pt-0.5">{row.label}</span>
                       <div className="flex gap-1 flex-wrap">
-                        {tags.map(t => (
-                          <span key={t.id} onClick={() => toggleTag(t.id)}
-                            className={`text-[11px] px-2 py-0.5 rounded-full cursor-pointer border ${editTags.has(t.id) ? 'bg-xhs text-white border-xhs' : 'bg-white text-stone-500 border-stone-200'}`}>{t.label}</span>
-                        ))}
+                        {tags.map(t => {
+                          const mode = tagModes[t.id];
+                          const selected = !!mode;
+                          return (
+                            <span key={t.id}>
+                              <span onClick={() => toggleTag(t.id)} title={selected ? '点击取消' : '点击选中'}
+                                className={`text-[11px] px-2 py-0.5 rounded-l-full cursor-pointer border-r-0 border ${selected ? (mode === 'must' ? 'bg-xhs text-white border-xhs' : 'bg-amber-400 text-white border-amber-400') : 'bg-white text-stone-500 border-stone-200 rounded-full'}`}>{t.label}</span>
+                              {selected && <span onClick={() => toggleMode(t.id)} title="切换必中/模糊"
+                                className={`text-[10px] px-1.5 py-0.5 rounded-r-full cursor-pointer border ${mode === 'must' ? 'bg-xhs text-white border-xhs' : 'bg-amber-400 text-white border-amber-400'}`}>{mode === 'must' ? '必' : '模'}</span>}
+                            </span>
+                          );
+                        })}
                       </div>
                     </div>
                   );
                 })}
               </div>
-              <div className="flex gap-2 mt-3">
+              {/* 模糊比例滑块 */}
+              <div className="flex items-center gap-2 mt-2 text-[11px] text-stone-500">
+                <span>模糊标签满足比例：</span>
+                <input type="range" min="0" max="100" value={Math.round(fuzzyRatio * 100)} onChange={e => setFuzzyRatio(Number(e.target.value) / 100)} className="w-32 accent-xhs" />
+                <span className="text-xhs font-medium">{Math.round(fuzzyRatio * 100)}%</span>
+              </div>
+              <div className="flex gap-2 mt-2">
                 <button onClick={saveTags} className="text-[12px] text-stone-600 border border-stone-200 rounded-full px-3 py-1.5 hover:bg-stone-50">保存标签</button>
                 <button onClick={doSearch} disabled={searching}
                   className="text-[12px] bg-xhs text-white rounded-full px-4 py-1.5 font-medium disabled:opacity-50">
