@@ -2,7 +2,7 @@
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { db, schema } from '../../database/db.js';
-import { eq, and, desc, inArray } from 'drizzle-orm';
+import { eq, and, desc, inArray, isNotNull } from 'drizzle-orm';
 import { searchMihuashi } from '../crawl/mihuashi.js';
 import { searchXhsByKeyword, downloadImage } from '../crawl/xhs.js';
 import { searchWeiboByKeyword } from '../crawl/weibo.js';
@@ -88,55 +88,83 @@ export class SearchService {
           if (!xhsCookie) { console.error('[search] 小红书: 未配置 XHS_COOKIE，跳过'); }
           else {
             const keywords = searchKeywords.length ? searchKeywords : ['插画'];
-            // 加载标签词表（AI 判断用）
             const tax = await loadTaxonomy();
+            // 预加载维度表（rootCode 判定用）
+            const dims = await db.select().from(schema.tagDimensions);
+            const dimById = new Map(dims.map(d => [d.id, d]));
+            const rootCodeOf = (dimId: number): string => {
+              let d = dimById.get(dimId), cur = dimId;
+              while (d && d.parentId) { cur = d.parentId; d = dimById.get(cur); }
+              return d?.code ?? '';
+            };
+            // 预加载库内已有 hash（去重用）
+            const libHashes = (await db.select({ hash: schema.artworks.imageHash })
+              .from(schema.artworks).where(isNotNull(schema.artworks.imageHash))).map(a => a.hash).filter(Boolean) as string[];
+            const libHashSet = new Set(libHashes);
+            // 本 session 内已收集的 hash（同 session 去重）
+            const sessionHashes = new Set<string>();
+
             for (const kw of keywords) {
               const notes = await searchXhsByKeyword(kw, 100, xhsCookie);
               console.log(`[search] 小红书 "${kw}": ${notes.length} 帖，开始 AI 筛选...`);
-              let kept = 0, skipped = 0;
+              let kept = 0, skipNotArt = 0, skipDup = 0, skipLowQ = 0;
               for (const n of notes) {
-                if (!n.images.length) { skipped++; continue; }
-                // AI 判断首图是否绘画作品（能打出 genre 画风标签 = 是作品）
+                if (!n.images.length) { skipNotArt++; continue; }
+                // AI 判断：是否绘画作品 + 质量分
                 let isArtwork = false;
+                let quality = 0;
                 let aiTags: any[] = [];
+                let imageHash: string | null = null;
                 try {
                   const { buf } = await downloadImage(n.images[0]);
+                  // pHash 去重：与库内 + 同 session 比对
+                  try { imageHash = await aHash(buf); } catch {}
+                  if (imageHash) {
+                    // 与库内已有作品去重（汉明距离 ≤5 = 近重复）
+                    if ([...libHashSet].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) {
+                      skipDup++; continue;
+                    }
+                    // 同 session 去重
+                    if ([...sessionHashes].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) {
+                      skipDup++; continue;
+                    }
+                    sessionHashes.add(imageHash);
+                  }
+                  // AI 打标 + 质量判断
                   const b64 = buf.toString('base64');
                   const mime = 'image/jpeg';
                   const { gemini, doubao } = await callBoth(b64, mime, tax.prompt);
                   const gIds = normalizeOutput(extractJson(gemini), tax.labelMap);
                   const dIds = normalizeOutput(extractJson(doubao), tax.labelMap);
                   const allIds = new Set([...gIds, ...dIds]);
-                  // 能打出 genre 画风的 = 绘画作品
                   const tagRows = allIds.size ? await db.select().from(schema.tags).where(inArray(schema.tags.id, [...allIds])) : [];
-                  const dims = await db.select().from(schema.tagDimensions);
-                  const dimById = new Map(dims.map(d => [d.id, d]));
-                  const rootCodeOf = (dimId: number): string => {
-                    let d = dimById.get(dimId), cur = dimId;
-                    while (d && d.parentId) { cur = d.parentId; d = dimById.get(cur); }
-                    return d?.code ?? '';
-                  };
                   aiTags = tagRows.map(t => ({ tagId: t.id, label: t.label, dimensionId: t.dimensionId, rootCode: rootCodeOf(t.dimensionId) }));
                   isArtwork = aiTags.some(t => t.rootCode === 'genre');
+                  // 质量分：两模型都选了 genre 标签 = 高质量(8)；一方选 = 中(5)；都没 genre = 低(2)
+                  const gGenre = [...gIds].some(id => { const t = tagRows.find(x => x.id === id); return t && rootCodeOf(t.dimensionId) === 'genre'; });
+                  const dGenre = [...dIds].some(id => { const t = tagRows.find(x => x.id === id); return t && rootCodeOf(t.dimensionId) === 'genre'; });
+                  quality = (gGenre && dGenre) ? 8 : (gGenre || dGenre) ? 5 : 2;
                 } catch (e: any) {
                   console.error(`[search] AI判断失败 "${n.title?.slice(0, 20)}": ${e.message}`);
                 }
-                if (isArtwork) {
-                  kept++;
-                  items.push({
-                    imageUrl: n.images[0] || '',
-                    title: n.title || kw,
-                    author: n.author || null,
-                    sourceUrl: n.sourceUrl,
-                    tags: n.xhsTags || [],
-                    allImages: n.images,
-                    aiTags,
-                  } as any);
-                } else {
-                  skipped++;
-                }
+                // 闸门1：必须是绘画作品
+                if (!isArtwork) { skipNotArt++; continue; }
+                // 闸门2：质量分 ≥5
+                if (quality < 5) { skipLowQ++; continue; }
+                kept++;
+                items.push({
+                  imageUrl: n.images[0] || '',
+                  title: n.title || kw,
+                  author: n.author || null,
+                  sourceUrl: n.sourceUrl,
+                  tags: n.xhsTags || [],
+                  allImages: n.images,
+                  aiTags,
+                  imageHash,
+                  quality,
+                } as any);
               }
-              console.log(`[search] 小红书 "${kw}" AI筛选: 保留 ${kept}，丢弃 ${skipped}（非绘画作品）`);
+              console.log(`[search] 小红书 "${kw}" 筛选完成: 保留 ${kept}，非绘画 ${skipNotArt}，低质 ${skipLowQ}，重复 ${skipDup}`);
             }
           }
         } else if (platform === 'weibo') {
@@ -168,6 +196,7 @@ export class SearchService {
           imageUrl: item.imageUrl || null,
           allImages: (item as any).allImages || null,
           aiTags: (item as any).aiTags || null,
+          imageHash: (item as any).imageHash || null,
           title: item.title || null,
           author: item.author || null,
           tags: item.tags || [],
