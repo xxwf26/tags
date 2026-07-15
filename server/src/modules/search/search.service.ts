@@ -18,7 +18,7 @@ export class SearchService {
     tags: { tagId: number; label: string; dimensionId: number | null; mode: 'must' | 'fuzzy' }[];
     platforms?: string[]; fuzzyRatio?: number;
   }) {
-    const platforms = body.platforms ?? ['baidu', 'mihuashi', 'xiaohongshu', 'weibo'];
+    const platforms = body.platforms ?? ['baidu'];
     const fuzzyRatio = body.fuzzyRatio ?? 0.5;
 
     // 加载维度表，解析每个标签的顶层 code（genre/technique/...）
