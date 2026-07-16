@@ -183,7 +183,7 @@ export async function searchXhsByKeyword(keyword: string, limit = 100, cookieStr
   const seen = new Set<string>();
   let skippedVideo = 0, skippedAd = 0;
 
-  p.on('response', async r => {
+  p.on('response', async (r: any) => {
     if (r.url().includes('/api/sns/web/v2/search/notes') || r.url().includes('/api/sns/web/v1/search/notes')) {
       try {
         const j = await r.json();
