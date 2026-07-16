@@ -113,7 +113,7 @@ export class SearchService {
             const sessionHashes = new Set<string>();
 
             for (const kw of keywords) {
-              const notes = await searchXhsByKeyword(kw, 100, xhsCookie);
+              const notes = await searchXhsByKeyword(kw, 300, xhsCookie);
               console.log(`[search] 小红书 "${kw}": ${notes.length} 帖，开始 AI 筛选...`);
               let kept = 0, skipNotArt = 0, skipDup = 0, skipLowQ = 0;
               for (const n of notes) {

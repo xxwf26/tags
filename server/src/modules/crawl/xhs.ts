@@ -168,15 +168,15 @@ import { execFile } from 'node:child_process';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export async function searchXhsByKeyword(keyword: string, limit = 50, cookieStr?: string): Promise<XhsSearchResult[]> {
+export async function searchXhsByKeyword(keyword: string, limit = 300, cookieStr?: string): Promise<XhsSearchResult[]> {
   if (!cookieStr) return [];
   const scriptPath = join(process.cwd(), 'src', 'scripts', 'xhs-search.mjs');
   return new Promise((resolve) => {
     const child = execFile('node', [scriptPath, keyword, cookieStr, String(limit)], {
       maxBuffer: 50 * 1024 * 1024,
-      timeout: 120000,
-      windowsHide: true,  // 关键：Windows 不弹终端窗口
-    }, (err, stdout) => {
+      timeout: 600000,
+      windowsHide: true,
+    }, (err: any, stdout: any) => {
       if (err) { console.error(`[xhs] 子进程搜索失败: ${err.message}`); resolve([]); return; }
       try {
         const j = JSON.parse(stdout);

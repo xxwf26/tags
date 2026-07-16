@@ -198,11 +198,7 @@ export function SearchPage() {
               <div className="flex gap-2 mt-2">
                 <button onClick={doSearch} disabled={searching}
                   className="text-[12px] bg-xhs text-white rounded-full px-4 py-1.5 font-medium disabled:opacity-50">
-                  {searching ? '搜索中…（后台运行，可等结果）' : '🔍 按标签搜索'}
-                </button>
-                <button onClick={doSearch} disabled={searching}
-                  className="text-[12px] bg-xhs text-white rounded-full px-4 py-1.5 font-medium disabled:opacity-50">
-                  {searching ? '搜索中…（约30-60秒）' : '🔍 按标签搜索'}
+                  {searching ? '搜索中…（后台运行，等结果自动刷新）' : '🔍 按标签搜索'}
                 </button>
               </div>
             </div>
