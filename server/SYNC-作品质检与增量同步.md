@@ -13,16 +13,21 @@
 | `server/src/database/delete-flagged.ts` | **新增**。按审计报告删低质作品：默认 dry-run，`--apply` 才删；删前备份、共用文件保护。 |
 | `server/src/database/crawl-all-works.ts` | **新增**。批量补爬（小红书）：遍历有小红书链的画师，每人补到目标张数(默认8)，宁缺毋滥、含去重+闸门。输出 `crawl-report.json`。 |
 | `server/src/database/crawl-all-weibo.ts` | **新增**。批量补爬（微博）：同上，走 `crawlArtistWorksWeibo`(playwright)，限速更长防风控。输出 `crawl-report-weibo.json`。 |
+| `server/src/database/crawl-all-mihuashi.ts` | **新增**。批量补爬（米画师）：走 `crawlArtistWorksMihuashi`，需登录态 `mhs-auth.json`，压缩长边1600+去重、不跑闸门。输出 `crawl-report-mihuashi.json`。 |
+| `server/src/modules/crawl/mihuashi.ts` | 反爬修复：加 `--disable-blink-features=AutomationControlled` + 抹 `navigator.webdriver` 绕过指纹检测；新增 `fetchMihuashiArtistWorks`(登录态抓画师主页作品) + `extractMihuashiProfileId`。 |
+| `server/src/database/mhs-save-auth.ts` | **新增**。从本机 Chrome 登录态副本导出 `mhs-auth.json`（需先关 Chrome）。米画师画师主页接口需登录态。 |
 | `server/src/database/export-increment.ts` | **新增**。导出增量同步包（见下）。 |
 | `server/src/database/import-increment.ts` | **新增**。幂等导入同步包（见下）。 |
 
 ### 本轮数据成果（我这边）
 - 存量 915 张 → AI 审计判出 202 张低质 → 删 199 张(保留3张草稿) → 剩 716 张
-- 批量补爬 147 个有小红书链的画师，新增 578 张，144 人达标 8 张
-- 批量补爬 49 个有微博链的画师，新增 100 张，25 人达标 8 张（微博反爬较硬，17 人主页真作品不足、7 人链接解析失败/账号私密，宁缺毋滥未强凑）
-- 当前总计 **1409 张**(小红书1162 + 微博247)，全部有 image_hash、零重复
+- 批量补爬 147 个有小红书链的画师，新增 593 张
+- 批量补爬 49 个有微博链的画师，新增 100 张（微博反爬较硬，多数主页作品不足/账号私密，宁缺毋滥未强凑）
+- 批量补爬 98 个有米画师链的画师，新增 668 张，77 人达标 8 张（米画师是画师上传成品高清稿，质量最好；已压缩到长边1600省空间）
+- 本轮共新增 **1361 张**，当前全库 **2077 张**(小红书1162 + 米画师668 + 微博247)，全部有 image_hash、零重复
 
 > 注意：新爬作品**尚未打画风标签**(爬取时 doTag=false)。如需检索，导入后各自跑 `TaggingService.tagBatch()` 补标。
+> 注意：米画师采集需 `mhs-auth.json` 登录态（各自本机生成，不随包传，已 gitignore）。
 
 ## 二、如何同步我这边的图片+作品数据（增量合并，不覆盖你的数据）
 

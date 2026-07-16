@@ -1,10 +1,11 @@
 // 候选复核队列：采集小红书笔记 → 入队 → 转正入库（下载图 + 建作品 + AI 打标）
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import sharp from 'sharp';
 import { db, schema } from '../../database/db.js';
 import { eq, isNotNull } from 'drizzle-orm';
 import { fetchNote, fetchProfileNotes, downloadImage, extractUrls } from '../crawl/xhs.js';
-import { searchMihuashi } from '../crawl/mihuashi.js';
+import { searchMihuashi, fetchMihuashiArtistWorks, extractMihuashiProfileId } from '../crawl/mihuashi.js';
 import { fetchWeiboImages, extractWeiboUid } from '../crawl/weibo.js';
 import { TaggingService } from '../tagging/tagging.service.js';
 import { gateArtwork } from '../tagging/ai.js';
@@ -277,5 +278,65 @@ export class CandidateService {
       } catch { failed++; }
     }
     return { artistId, nickname, found: items.length, pooled: cands.length, imported: artworkIds.length, skipped, rejected, failed, artworkIds };
+  }
+
+  // 按画师米画师主页链接爬其作品（需登录态 mhs-auth.json）。米画师是画师上传的成品高清原图，
+  // 几乎无广告，故【不跑AI闸门只去重】；原图动辄十几MB/上万像素，下载后【压缩到长边≤1600px】再存。
+  // limit=最终入库张数；pool=候选池；authPath=登录态文件。
+  async crawlArtistWorksMihuashi(artistId: number, limit = 8, doTag = false, pool = 30, authPath = join(process.cwd(), 'mhs-auth.json')) {
+    const [artist] = await db.select().from(schema.artists).where(eq(schema.artists.id, artistId));
+    if (!artist) throw new Error('画师不存在');
+    const links = (artist.links as any) || {};
+    const mhsUrl: string | undefined = (links.mihuashi || [])[0];
+    if (!mhsUrl) throw new Error('该画师无米画师主页链接');
+    const profileId = extractMihuashiProfileId(mhsUrl);
+    if (!profileId) throw new Error('米画师链接无法解析 profileId');
+
+    const items = await fetchMihuashiArtistWorks(profileId, authPath, pool);
+    if (!items.length) throw new Error('米画师主页未解析到作品');
+
+    const uploadsDir = join(process.cwd(), 'uploads');
+    await mkdir(uploadsDir, { recursive: true });
+    const tagging = doTag ? new TaggingService() : null;
+    const existingHashes = (await db.select({ hash: schema.artworks.imageHash })
+      .from(schema.artworks).where(isNotNull(schema.artworks.imageHash))).map(a => a.hash).filter(Boolean) as string[];
+
+    const artworkIds: number[] = [];
+    let skipped = 0, failed = 0;
+    for (const it of items) {
+      if (artworkIds.length >= limit) break;
+      try {
+        const { buf } = await downloadImage(it.imageUrl);
+        // 压缩到长边≤1600、转 webp，省空间；同时拿压缩后真实宽高
+        const img = sharp(buf, { failOn: 'none' }).rotate();
+        const meta = await img.metadata();
+        const out = await img.resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true })
+          .webp({ quality: 82 }).toBuffer();
+        let imageHash: string | null = null;
+        try { imageHash = await aHash(out); } catch {}
+        if (imageHash && existingHashes.find(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipped++; continue; }
+        const uniq = `${it.mhsId || 'n'}-${Date.now()}-${artworkIds.length}`;
+        const filename = `mhs-${artistId}-${uniq}.webp`;
+        await writeFile(join(uploadsDir, filename), out);
+        const w = it.width || meta.width || null, h = it.height || meta.height || null;
+        const [ar] = await db.insert(schema.artworks).values({
+          artistId,
+          title: null,
+          imageUrl: `/uploads/${filename}`,
+          thumbUrl: `/uploads/${filename}`,
+          width: w, height: h,
+          orientation: deriveOrientation(w, h),
+          imageHash,
+          sourcePlatform: 'mihuashi',
+          sourceUrl: mhsUrl,
+          tagStatus: 'pending',
+        });
+        const aid = (ar as any).insertId;
+        artworkIds.push(aid);
+        if (imageHash) existingHashes.push(imageHash);
+        if (tagging) { try { await tagging.tagArtwork(aid); } catch {} }
+      } catch { failed++; }
+    }
+    return { artistId, nickname: artist.name, found: items.length, imported: artworkIds.length, skipped, failed, artworkIds };
   }
 }

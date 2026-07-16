@@ -99,6 +99,7 @@ export async function downloadImage(url: string): Promise<{ buf: Buffer; type: s
   let extra: Record<string, string> = {};
   if (url.includes('xhscdn.com')) extra = { Referer: 'https://www.xiaohongshu.com/' };
   else if (url.includes('sinaimg.cn')) extra = { Referer: 'https://m.weibo.cn/' };
+  else if (url.includes('mihuashi.com')) extra = { Referer: 'https://www.mihuashi.com/' };
   const { status, body, type } = await get(url, 0, true, extra);
   if (status !== 200 || !body || body.length < 2000) throw new Error(`图下载失败 status ${status}`);
   return { buf: body, type: type || 'image/jpeg' };
