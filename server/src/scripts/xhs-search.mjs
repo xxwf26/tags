@@ -47,7 +47,12 @@ async function searchOneKeyword(keyword) {
           }
           const xhsTags = [];
           for (const tag of (nc.corner_tag_info || [])) { if (tag?.text) xhsTags.push(tag.text); }
-          items.push({ noteId, title, author: nc.user?.nickname || '', sourceUrl: `https://www.xiaohongshu.com/explore/${noteId}`, type: nc.type || 'normal', images: allImages, xhsTags });
+          // 提取 xsec_token，拼接完整可访问的链接
+          const xsecToken = n.xsec_token || nc.xsec_token || '';
+          const sourceUrl = xsecToken
+            ? `https://www.xiaohongshu.com/explore/${noteId}?xsec_token=${xsecToken}&xsec_source=pc_search`
+            : `https://www.xiaohongshu.com/explore/${noteId}`;
+          items.push({ noteId, title, author: nc.user?.nickname || '', sourceUrl, type: nc.type || 'normal', images: allImages, xhsTags });
         }
       } catch {}
     }
