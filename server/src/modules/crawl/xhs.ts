@@ -159,83 +159,33 @@ export type XhsSearchResult = {
 
 // 按关键词搜索小红书笔记（需 cookie，拦截 v2 search API，翻页+限速）
 // 过滤视频帖 + 广告帖，提取每帖全部图片
-// 共享浏览器单例（避免每次搜索弹窗）
+// 共享浏览器单例（兼容旧调用，不再用于搜索）
 let _xhsBrowser: any = null;
-export async function getXhsBrowser() {
-  if (!_xhsBrowser || !_xhsBrowser.isConnected()) {
-    const { chromium } = await import('playwright');
-    _xhsBrowser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'] });
-  }
-  return _xhsBrowser;
-}
+export async function getXhsBrowser() { return null; }
 
-export async function searchXhsByKeyword(keyword: string, limit = 100, cookieStr?: string): Promise<XhsSearchResult[]> {
+// 按关键词搜索小红书笔记（独立子进程 + playwright，windowsHide 不弹窗）
+import { execFile } from 'node:child_process';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+export async function searchXhsByKeyword(keyword: string, limit = 50, cookieStr?: string): Promise<XhsSearchResult[]> {
   if (!cookieStr) return [];
-  const b = await getXhsBrowser();
-  const cookies = cookieStr.split('; ').map(c => { const [name, ...r] = c.split('='); return { name, value: r.join('='), domain: '.xiaohongshu.com', path: '/' }; });
-  const ctx = await b.newContext({
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    viewport: { width: 1440, height: 900 }, locale: 'zh-CN',
-  });
-  await ctx.addCookies(cookies);
-  const p = await ctx.newPage();
-  const items: XhsSearchResult[] = [];
-  const seen = new Set<string>();
-  let skippedVideo = 0, skippedAd = 0;
-
-  p.on('response', async (r: any) => {
-    if (r.url().includes('/api/sns/web/v2/search/notes') || r.url().includes('/api/sns/web/v1/search/notes')) {
+  const scriptPath = join(process.cwd(), 'src', 'scripts', 'xhs-search.mjs');
+  return new Promise((resolve) => {
+    const child = execFile('node', [scriptPath, keyword, cookieStr, String(limit)], {
+      maxBuffer: 50 * 1024 * 1024,
+      timeout: 120000,
+      windowsHide: true,  // 关键：Windows 不弹终端窗口
+    }, (err, stdout) => {
+      if (err) { console.error(`[xhs] 子进程搜索失败: ${err.message}`); resolve([]); return; }
       try {
-        const j = await r.json();
-        const notes = j.data?.items || [];
-        for (const n of notes) {
-          const nc = n.note_card || n;
-          const noteId = nc.note_id || n.id || '';
-          if (!noteId || seen.has(noteId)) continue;
-          // 过滤视频帖
-          if (nc.type === 'video') { skippedVideo++; continue; }
-          // 过滤广告/无关帖
-          const title = nc.display_title || nc.title || '';
-          if (AD_KEYWORDS.some(kw => title.includes(kw))) { skippedAd++; continue; }
-          seen.add(noteId);
-          // 提取该帖所有图片 URL（image_list → info_list → url）
-          const allImages: string[] = [];
-          for (const im of (nc.image_list || [])) {
-            const infoList = im.info_list || [];
-            const url = (infoList.find((x: any) => x.image_scene === 'WB_DFT') || infoList[infoList.length - 1] || infoList[0])?.url;
-            if (url) allImages.push(String(url).replace(/^http:\/\//, 'https://'));
-          }
-          // 如果 image_list 没图，用 cover
-          if (!allImages.length) {
-            const cover = nc.cover?.url_default || nc.cover?.url_pre || '';
-            if (cover) allImages.push(String(cover).replace(/^http:\/\//, 'https://'));
-          }
-          // 提取帖子标签（corner_tag_info）
-          const xhsTags: string[] = [];
-          for (const tag of (nc.corner_tag_info || [])) {
-            if (tag?.text) xhsTags.push(tag.text);
-          }
-          items.push({
-            noteId, title, author: nc.user?.nickname || '',
-            sourceUrl: `https://www.xiaohongshu.com/explore/${noteId}`,
-            type: nc.type || 'normal', images: allImages, xhsTags,
-          });
-        }
-      } catch {}
-    }
+        const j = JSON.parse(stdout);
+        console.log(`[xhs] 搜索 "${keyword}": ${j.items.length} 条（过滤视频 ${j.skippedVideo}，广告 ${j.skippedAd}）`);
+        resolve(j.items);
+      } catch (e: any) {
+        console.error(`[xhs] 解析子进程输出失败: ${e.message}`);
+        resolve([]);
+      }
+    });
   });
-  try {
-    await p.goto('https://www.xiaohongshu.com/', { waitUntil: 'networkidle', timeout: 30000 });
-    await p.waitForTimeout(2000);
-    await p.goto(`https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent(keyword)}&source=web_explore_feed`, { waitUntil: 'networkidle', timeout: 30000 });
-    await p.waitForTimeout(6000);
-    const maxScrolls = Math.ceil(limit / 20) + 5;
-    for (let i = 0; i < maxScrolls && items.length < limit; i++) {
-      await p.evaluate(() => window.scrollBy(0, 1200));
-      await p.waitForTimeout(3000 + Math.random() * 1000);
-    }
-  } catch {}
-  await ctx.close();
-  console.log(`[xhs] 搜索 "${keyword}": ${items.length} 条（过滤视频 ${skippedVideo}，广告 ${skippedAd}）`);
-  return items.slice(0, limit);
 }

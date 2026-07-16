@@ -90,8 +90,16 @@ export function SearchPage() {
   const doSearch = async () => {
     if (!selectedRef) return;
     setSearching(true);
+    // 从 tag tree 查 label（不依赖 aiTags，避免乱码/空）
+    const allTags: { id: number; label: string; dimensionId: number }[] = [];
+    for (const top of (tagsQ.data ?? [])) {
+      for (const t of top.tags) allTags.push({ id: t.id, label: t.label, dimensionId: top.id });
+      for (const sub of top.children) {
+        for (const t of sub.tags) allTags.push({ id: t.id, label: t.label, dimensionId: sub.id });
+      }
+    }
     const tags = selectedIds.map(id => {
-      const t = (ref?.aiTags ?? []).find(a => a.tagId === id);
+      const t = allTags.find(a => a.id === id);
       return { tagId: id, label: t?.label ?? '', dimensionId: t?.dimensionId ?? null, mode: tagModes[id] };
     });
     startSearchM.mutate({ referenceId: selectedRef, tags, platforms: ['xiaohongshu'], fuzzyRatio }, {

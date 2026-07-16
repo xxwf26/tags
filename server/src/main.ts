@@ -30,10 +30,5 @@ async function bootstrap() {
   const port = Number(process.env.PORT || 3322);
   await app.listen(port);
   console.log(`style-atlas server on http://localhost:${port}`);
-
-  // 预启动 playwright 浏览器（避免搜索时弹窗）
-  import('./modules/crawl/xhs.js').then(m => m.getXhsBrowser()).then(() => {
-    console.log('[browser] XHS 浏览器预启动完成');
-  }).catch(() => {});
 }
 bootstrap();
