@@ -247,6 +247,24 @@ export class SearchService {
     return { sessionId, resultCount: totalResults, newCount: newResults };
   }
 
+  // 删除单个 session + 其所有结果
+  async deleteSession(sessionId: number) {
+    await db.delete(schema.searchResults).where(eq(schema.searchResults.sessionId, sessionId));
+    await db.delete(schema.searchSessions).where(eq(schema.searchSessions.id, sessionId));
+    return { sessionId, deleted: true };
+  }
+
+  // 删除参考图的所有 session + 结果（清空历史）
+  async deleteAllSessions(referenceId: number) {
+    const sessions = await db.select().from(schema.searchSessions)
+      .where(eq(schema.searchSessions.referenceImageId, referenceId));
+    for (const s of sessions) {
+      await db.delete(schema.searchResults).where(eq(schema.searchResults.sessionId, s.id));
+    }
+    await db.delete(schema.searchSessions).where(eq(schema.searchSessions.referenceImageId, referenceId));
+    return { referenceId, deletedSessions: sessions.length };
+  }
+
   async listSessions(referenceId: number) {
     return db.select().from(schema.searchSessions)
       .where(eq(schema.searchSessions.referenceImageId, referenceId)).orderBy(desc(schema.searchSessions.id));

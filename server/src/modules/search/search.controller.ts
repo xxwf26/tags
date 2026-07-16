@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, ParseIntPipe, Query } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Body, Param, ParseIntPipe, Query } from '@nestjs/common';
 import { SearchService } from './search.service.js';
 
 @Controller('search')
@@ -15,6 +15,18 @@ export class SearchController {
   @Post('abort/:sessionId')
   abort(@Param('sessionId', ParseIntPipe) sessionId: number) {
     return this.searchService.abort(sessionId);
+  }
+
+  // 删除单个搜索历史：DELETE /api/search/sessions/:id
+  @Delete('sessions/:id')
+  deleteSession(@Param('id', ParseIntPipe) id: number) {
+    return this.searchService.deleteSession(id);
+  }
+
+  // 清空参考图所有搜索历史：DELETE /api/search/sessions-all?referenceId=X
+  @Delete('sessions-all')
+  deleteAllSessions(@Query('referenceId') referenceId: string) {
+    return this.searchService.deleteAllSessions(Number(referenceId));
   }
 
   // 会话列表：GET /api/search/sessions?referenceId=X

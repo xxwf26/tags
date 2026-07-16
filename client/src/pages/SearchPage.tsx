@@ -237,7 +237,11 @@ export function SearchPage() {
         <div className="bg-white rounded-2xl p-4 border border-stone-100 mb-3">
           <div className="flex items-center justify-between mb-2">
             <h3 className="font-semibold text-stone-700 text-[14px]">搜索历史（{sessions.length} 次，不覆盖）</h3>
-            <span className="text-[11px] text-stone-400">每次搜索独立保留，标新增</span>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] text-stone-400">每次搜索独立保留，标新增</span>
+              <button onClick={() => { if (confirm('清空所有搜索历史及其结果？')) { fetch(BASE + '/search/sessions-all?referenceId=' + selectedRef, { method: 'DELETE' }).then(() => { refetchSessions(); setActiveSession(null); }); } }}
+                className="text-[11px] text-rose-500 border border-rose-200 rounded-full px-2 py-0.5 hover:bg-rose-50">清空全部</button>
+            </div>
           </div>
           <div className="space-y-2">
             {sessions.map((s, i) => {
@@ -245,12 +249,14 @@ export function SearchPage() {
               const tagLabels = Array.isArray(tags) ? tags.map((t: any) => t.label).filter(Boolean) : [];
               const ratio = (s.searchTags as any)?.fuzzyRatio;
               return (
-                <div key={s.id} className={`border rounded-lg p-3 cursor-pointer transition-colors ${activeSession === s.id ? 'border-xhs bg-xhs-soft/30' : 'border-stone-200 hover:border-stone-300'}`}
+                <div key={s.id} className={`border rounded-lg p-3 cursor-pointer transition-colors relative group ${activeSession === s.id ? 'border-xhs bg-xhs-soft/30' : 'border-stone-200 hover:border-stone-300'}`}
                   onClick={() => setActiveSession(s.id)}>
+                  <button onClick={(e) => { e.stopPropagation(); if (confirm('删除本次搜索记录及其所有结果？')) { fetch(BASE + '/search/sessions/' + s.id, { method: 'DELETE' }).then(() => { refetchSessions(); if (activeSession === s.id) setActiveSession(null); }); } }}
+                    className="absolute top-2 right-2 w-5 h-5 rounded-full bg-rose-100 text-rose-500 text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-10" title="删除此搜索">×</button>
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <span className="text-[13px] font-medium text-stone-700">第 {i + 1} 次搜索</span>
-                      <span className="text-[10px] text-stone-400">{new Date(s.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+                      <span className="text-[10px] text-stone-400">{s.status === 'running' ? '⏳进行中' : s.status === 'failed' ? '⚠已终止' : new Date(s.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
                       {s.newCount > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded bg-xhs text-white">{s.newCount} 新增</span>}
                     </div>
                     <span className="text-[12px] text-stone-500">{s.resultCount} 张结果</span>
