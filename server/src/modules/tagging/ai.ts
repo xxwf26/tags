@@ -11,7 +11,8 @@ const DOUBAO_MODEL = process.env.DOUBAO_MODEL || 'doubao-seed-1-6-vision';
 export type Taxonomy = {
   codes: string[];
   prompt: string;
-  labelMap: Map<string, number>; // lower(label 或 alias) -> tagId
+  labelMap: Map<string, number>;
+  codesStr?: string;
 };
 
 // 从 DB 载入 6 维两级词表 + 构建 prompt + 别名归一表
@@ -31,15 +32,29 @@ export async function loadTaxonomy(): Promise<Taxonomy> {
     tags: tagRows.filter(t => rootOf(t.dimensionId) === top.id).map(t => ({ label: t.label, aliases: t.aliases })),
   }));
   const codes = tree.map(d => d.code);
-  const prompt = `你是资深插画风格分析师。给你一张画作，请从固定标签词表中为它打多维标签。
+  const prompt = `你是资深插画风格分析师。给你一张图，先判断它是否为绘画/插画作品，再打标签。
+
+判断标准（is_artwork 字段）：
+- 是：手绘、板绘、数字插画、水彩、油画、国画、漫画、动画截图等**人工创作的画作**
+- 否：实拍照片、截图、纯文字图、广告海报、商品图、表情包贴图、AI生成图（非人工绘制）
+
+质量评分（quality 字段，0-10）：
+- 0-2分：非画作（照片/截图/广告/纯文字）
+- 3-4分：画作但完成度低/草稿/速写/简笔画
+- 5-6分：普通完成度的插画
+- 7-8分：精美的插画作品
+- 9-10分：大师级作品
+
 词表（只能从中选词，禁止自创）：
 ${tree.map(d => `- ${d.name}(${d.code})：${d.tags.map(t => t.label).join('、')}`).join('\n')}
 
 规则：
-1. 每个维度选 0~3 个最贴切的标签；拿不准就少选或不选，不要硬凑。
-2. 只输出词表里出现过的原词。
-3. 严格输出 JSON，格式：{${codes.map(c => `"${c}":[]`).join(',')}}
-4. 不要输出任何解释、不要用 markdown 代码块包裹。`;
+1. 先判断 is_artwork 和 quality。
+2. 如果 is_artwork=false，标签可以留空。
+3. 如果 is_artwork=true，每个维度选 0~3 个最贴切的标签。
+4. 只输出词表里出现过的原词。
+5. 严格输出 JSON，格式：{"is_artwork":true,"quality":7,${codes.map(c => `"${c}":[]`).join(',')}}
+6. 不要输出任何解释、不要用 markdown 代码块包裹。`;
 
   const labelMap = new Map<string, number>();
   for (const t of tagRows) {
@@ -48,7 +63,7 @@ ${tree.map(d => `- ${d.name}(${d.code})：${d.tags.map(t => t.label).join('、')
       labelMap.set(String(a).trim().toLowerCase(), t.id);
     }
   }
-  return { codes, prompt, labelMap };
+  return { codes, prompt, labelMap, codesStr: codes.map(c => `"${c}":[]`).join(',') };
 }
 
 export function extractJson(text: string | null): any {

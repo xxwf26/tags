@@ -120,30 +120,33 @@ export class SearchService {
                   // pHash 去重：与库内 + 同 session 比对
                   try { imageHash = await aHash(buf); } catch {}
                   if (imageHash) {
-                    // 与库内已有作品去重（汉明距离 ≤5 = 近重复）
-                    if ([...libHashSet].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) {
-                      skipDup++; continue;
-                    }
-                    // 同 session 去重
-                    if ([...sessionHashes].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) {
-                      skipDup++; continue;
-                    }
+                    if ([...libHashSet].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipDup++; continue; }
+                    if ([...sessionHashes].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipDup++; continue; }
                     sessionHashes.add(imageHash);
                   }
-                  // AI 打标 + 质量判断
+                  // AI 打标 + 直接判断是否绘画 + 质量分
                   const b64 = buf.toString('base64');
                   const mime = 'image/jpeg';
                   const { gemini, doubao } = await callBoth(b64, mime, tax.prompt);
-                  const gIds = normalizeOutput(extractJson(gemini), tax.labelMap);
-                  const dIds = normalizeOutput(extractJson(doubao), tax.labelMap);
-                  const allIds = new Set([...gIds, ...dIds]);
-                  const tagRows = allIds.size ? await db.select().from(schema.tags).where(inArray(schema.tags.id, [...allIds])) : [];
-                  aiTags = tagRows.map(t => ({ tagId: t.id, label: t.label, dimensionId: t.dimensionId, rootCode: rootCodeOf(t.dimensionId) }));
-                  isArtwork = aiTags.some(t => t.rootCode === 'genre');
-                  // 质量分：两模型都选了 genre 标签 = 高质量(8)；一方选 = 中(5)；都没 genre = 低(2)
-                  const gGenre = [...gIds].some(id => { const t = tagRows.find(x => x.id === id); return t && rootCodeOf(t.dimensionId) === 'genre'; });
-                  const dGenre = [...dIds].some(id => { const t = tagRows.find(x => x.id === id); return t && rootCodeOf(t.dimensionId) === 'genre'; });
-                  quality = (gGenre && dGenre) ? 8 : (gGenre || dGenre) ? 5 : 2;
+                  const gParsed = extractJson(gemini);
+                  const dParsed = extractJson(doubao);
+                  // 直接用 AI 的 is_artwork + quality 字段
+                  const gArt = gParsed?.is_artwork === true;
+                  const dArt = dParsed?.is_artwork === true;
+                  const gQ = Number(gParsed?.quality) || 0;
+                  const dQ = Number(dParsed?.quality) || 0;
+                  // 两模型都说是绘画 = 确认绘画；一方说 = 也算（宁留勿杀）
+                  isArtwork = gArt || dArt;
+                  // 质量分取两模型最高
+                  quality = Math.max(gQ, dQ);
+                  // 标签（仅在确认是绘画时才取）
+                  if (isArtwork) {
+                    const gIds = normalizeOutput(gParsed, tax.labelMap);
+                    const dIds = normalizeOutput(dParsed, tax.labelMap);
+                    const allIds = new Set([...gIds, ...dIds]);
+                    const tagRows = allIds.size ? await db.select().from(schema.tags).where(inArray(schema.tags.id, [...allIds])) : [];
+                    aiTags = tagRows.map(t => ({ tagId: t.id, label: t.label, dimensionId: t.dimensionId, rootCode: rootCodeOf(t.dimensionId) }));
+                  }
                 } catch (e: any) {
                   console.error(`[search] AI判断失败 "${n.title?.slice(0, 20)}": ${e.message}`);
                 }
