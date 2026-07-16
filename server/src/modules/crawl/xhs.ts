@@ -159,10 +159,19 @@ export type XhsSearchResult = {
 
 // 按关键词搜索小红书笔记（需 cookie，拦截 v2 search API，翻页+限速）
 // 过滤视频帖 + 广告帖，提取每帖全部图片
+// 共享浏览器单例（避免每次搜索弹窗）
+let _xhsBrowser: any = null;
+async function getXhsBrowser() {
+  if (!_xhsBrowser || !_xhsBrowser.isConnected()) {
+    const { chromium } = await import('playwright');
+    _xhsBrowser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'] });
+  }
+  return _xhsBrowser;
+}
+
 export async function searchXhsByKeyword(keyword: string, limit = 100, cookieStr?: string): Promise<XhsSearchResult[]> {
   if (!cookieStr) return [];
-  const { chromium } = await import('playwright');
-  const b = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-gpu'] });
+  const b = await getXhsBrowser();
   const cookies = cookieStr.split('; ').map(c => { const [name, ...r] = c.split('='); return { name, value: r.join('='), domain: '.xiaohongshu.com', path: '/' }; });
   const ctx = await b.newContext({
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -226,7 +235,7 @@ export async function searchXhsByKeyword(keyword: string, limit = 100, cookieStr
       await p.waitForTimeout(3000 + Math.random() * 1000);
     }
   } catch {}
-  await b.close();
+  await ctx.close();
   console.log(`[xhs] 搜索 "${keyword}": ${items.length} 条（过滤视频 ${skippedVideo}，广告 ${skippedAd}）`);
   return items.slice(0, limit);
 }
