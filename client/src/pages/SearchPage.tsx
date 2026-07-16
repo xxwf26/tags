@@ -112,10 +112,10 @@ export function SearchPage() {
     startSearchM.mutate({ referenceId: selectedRef, tags, platforms: ['xiaohongshu'], fuzzyRatio }, {
       onSuccess: (r) => {
         setActiveSession(r.sessionId);
-        // 轮询搜索状态
         const poll = setInterval(() => {
           refetchSessions();
-          // 检查 session 状态
+          // 也刷新结果（增量写入时能看到结果陆续出现）
+          resultsQ.refetch();
           fetch(BASE + '/search/sessions?referenceId=' + selectedRef)
             .then(r => r.json())
             .then((sessions: any[]) => {
@@ -124,7 +124,7 @@ export function SearchPage() {
                 clearInterval(poll);
                 setSearching(false);
                 refetchSessions();
-                // 自动选中新 session 的结果
+                resultsQ.refetch();
                 setActiveSession(r.sessionId);
               }
             });
@@ -219,8 +219,13 @@ export function SearchPage() {
               <div className="flex gap-2 mt-2">
                 <button onClick={doSearch} disabled={searching}
                   className="text-[12px] bg-xhs text-white rounded-full px-4 py-1.5 font-medium disabled:opacity-50">
-                  {searching ? '搜索中…（后台运行，等结果自动刷新）' : '🔍 按标签搜索'}
+                  {searching ? '搜索中…（结果陆续出现）' : '🔍 按标签搜索'}
                 </button>
+                {searching && (
+                  <button onClick={() => {
+                    fetch(BASE + '/search/abort/' + activeSession, { method: 'POST' }).then(() => { setSearching(false); refetchSessions(); });
+                  }} className="text-[12px] text-rose-500 border border-rose-300 rounded-full px-3 py-1.5 hover:bg-rose-50">⏹ 终止</button>
+                )}
               </div>
             </div>
           </div>

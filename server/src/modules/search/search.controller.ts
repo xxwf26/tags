@@ -11,6 +11,12 @@ export class SearchController {
     return this.searchService.startSearch(body);
   }
 
+  // 终止搜索：POST /api/search/abort/:sessionId
+  @Post('abort/:sessionId')
+  abort(@Param('sessionId', ParseIntPipe) sessionId: number) {
+    return this.searchService.abort(sessionId);
+  }
+
   // 会话列表：GET /api/search/sessions?referenceId=X
   @Get('sessions')
   sessions(@Query('referenceId') referenceId: string) {

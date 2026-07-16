@@ -12,7 +12,17 @@ import { logOperation } from '../operation/op.js';
 import { loadTaxonomy, extractJson, normalizeOutput, callBoth } from '../tagging/ai.js';
 import { SettingsService } from '../settings/settings.service.js';
 
+// 正在运行的搜索进程（用于终止）
+const runningSearches = new Map<number, boolean>(); // sessionId → aborted?
+
 export class SearchService {
+  // 终止搜索
+  async abort(sessionId: number) {
+    runningSearches.set(sessionId, true);
+    await db.update(schema.searchSessions).set({ status: 'failed' }).where(eq(schema.searchSessions.id, sessionId));
+    return { sessionId, aborted: true };
+  }
+
   // 发起搜索：创建 session → 各平台搜索 → 存结果 → 标记 isNew
   // tags 支持 mode: 'must'(必中，用作搜索关键词) | 'fuzzy'(模糊，达到比例即满足)
   async startSearch(body: {
@@ -34,15 +44,19 @@ export class SearchService {
     const sessionId = (sr as any).insertId;
 
     // 异步执行，不阻塞响应
+    runningSearches.set(sessionId, false);
     this.executeSearch(sessionId, body, prevSession).catch(e => {
       console.error(`[search] session ${sessionId} 失败: ${e.message}`);
       db.update(schema.searchSessions).set({ status: 'failed' }).where(eq(schema.searchSessions.id, sessionId)).then(() => {});
+    }).finally(() => {
+      runningSearches.delete(sessionId);
     });
 
     return { sessionId, status: 'running' };
   }
 
   private async executeSearch(sessionId: number, body: any, prevSession: number | null) {
+    const isAborted = () => runningSearches.get(sessionId) === true;
     const platforms = body.platforms ?? ['xiaohongshu'];
     const settingsSvc = new SettingsService();
     const xhsCookie = await settingsSvc.getXhsCookie();
@@ -115,41 +129,36 @@ export class SearchService {
             const sessionHashes = new Set<string>();
 
             for (const kw of keywords) {
+              if (isAborted()) { console.log(`[search] session ${sessionId} 已终止`); break; }
               const notes = await searchXhsByKeyword(kw, 300, xhsCookie);
-              console.log(`[search] 小红书 "${kw}": ${notes.length} 帖，开始 AI 筛选...`);
+              console.log(`[search] 小红书 "${kw}": ${notes.length} 帖，开始 AI 筛选（增量写入）...`);
               let kept = 0, skipNotArt = 0, skipDup = 0, skipLowQ = 0;
               for (const n of notes) {
+                if (isAborted()) { console.log(`[search] session ${sessionId} 已终止（已处理 ${kept} 张）`); break; }
                 if (!n.images.length) { skipNotArt++; continue; }
-                // AI 判断：是否绘画作品 + 质量分
                 let isArtwork = false;
                 let quality = 0;
                 let aiTags: any[] = [];
                 let imageHash: string | null = null;
                 try {
                   const { buf } = await downloadImage(n.images[0]);
-                  // pHash 去重：与库内 + 同 session 比对
                   try { imageHash = await aHash(buf); } catch {}
                   if (imageHash) {
                     if ([...libHashSet].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipDup++; continue; }
                     if ([...sessionHashes].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipDup++; continue; }
                     sessionHashes.add(imageHash);
                   }
-                  // AI 打标 + 直接判断是否绘画 + 质量分
                   const b64 = buf.toString('base64');
                   const mime = 'image/jpeg';
                   const { gemini, doubao } = await callBoth(b64, mime, tax.prompt);
                   const gParsed = extractJson(gemini);
                   const dParsed = extractJson(doubao);
-                  // 直接用 AI 的 is_artwork + quality 字段
                   const gArt = gParsed?.is_artwork === true;
                   const dArt = dParsed?.is_artwork === true;
                   const gQ = Number(gParsed?.quality) || 0;
                   const dQ = Number(dParsed?.quality) || 0;
-                  // 两模型都说是绘画 = 确认绘画；一方说 = 也算（宁留勿杀）
                   isArtwork = gArt || dArt;
-                  // 质量分取两模型最高
                   quality = Math.max(gQ, dQ);
-                  // 标签（仅在确认是绘画时才取）
                   if (isArtwork) {
                     const gIds = normalizeOutput(gParsed, tax.labelMap);
                     const dIds = normalizeOutput(dParsed, tax.labelMap);
@@ -160,22 +169,34 @@ export class SearchService {
                 } catch (e: any) {
                   console.error(`[search] AI判断失败 "${n.title?.slice(0, 20)}": ${e.message}`);
                 }
-                // 闸门1：必须是绘画作品
                 if (!isArtwork) { skipNotArt++; continue; }
-                // 闸门2：质量分 ≥5
                 if (quality < 5) { skipLowQ++; continue; }
                 kept++;
-                items.push({
-                  imageUrl: n.images[0] || '',
+                // 增量写入：每筛选完一张立即写 DB
+                const dedupKey = n.sourceUrl || n.images[0] || '';
+                const isNew = !prevUrls.has(dedupKey) && !prevHashes.has(n.images[0] || '');
+                await db.insert(schema.searchResults).values({
+                  sessionId,
+                  referenceImageId: body.referenceId,
+                  platform: 'xiaohongshu',
+                  sourceUrl: n.sourceUrl || null,
+                  imageUrl: n.images[0] || null,
+                  allImages: n.images,
+                  aiTags: aiTags.length ? aiTags : null,
+                  imageHash: imageHash || null,
                   title: n.title || kw,
                   author: n.author || null,
-                  sourceUrl: n.sourceUrl,
                   tags: n.xhsTags || [],
-                  allImages: n.images,
-                  aiTags,
-                  imageHash,
-                  quality,
-                } as any);
+                  isNew: isNew ? 1 : 0,
+                  tier: 'tier1',
+                });
+                totalResults++;
+                if (isNew) newResults++;
+                // 每10张更新一次 session 计数（前端轮询能看到进度）
+                if (kept % 10 === 0) {
+                  await db.update(schema.searchSessions).set({ resultCount: totalResults, newCount: newResults }).where(eq(schema.searchSessions.id, sessionId));
+                  console.log(`[search] 进度: 已保留 ${kept} 张（非绘画 ${skipNotArt}，低质 ${skipLowQ}，重复 ${skipDup}）`);
+                }
               }
               console.log(`[search] 小红书 "${kw}" 筛选完成: 保留 ${kept}，非绘画 ${skipNotArt}，低质 ${skipLowQ}，重复 ${skipDup}`);
             }
