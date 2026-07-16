@@ -193,7 +193,7 @@ export class SearchService {
                 totalResults++;
                 if (isNew) newResults++;
                 // 每10张更新一次 session 计数（前端轮询能看到进度）
-                if (kept % 10 === 0) {
+                if (kept % 3 === 0) {
                   await db.update(schema.searchSessions).set({ resultCount: totalResults, newCount: newResults }).where(eq(schema.searchSessions.id, sessionId));
                   console.log(`[search] 进度: 已保留 ${kept} 张（非绘画 ${skipNotArt}，低质 ${skipLowQ}，重复 ${skipDup}）`);
                 }

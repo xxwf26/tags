@@ -255,7 +255,7 @@ export function SearchPage() {
                     className="absolute top-2 right-2 w-5 h-5 rounded-full bg-rose-100 text-rose-500 text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-10" title="删除此搜索">×</button>
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <span className="text-[13px] font-medium text-stone-700">第 {i + 1} 次搜索</span>
+                      <span className="text-[13px] font-medium text-stone-700">第 {sessions.length - i} 次搜索</span>
                       <span className="text-[10px] text-stone-400">{s.status === 'running' ? '⏳进行中' : s.status === 'failed' ? '⚠已终止' : new Date(s.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
                       {s.newCount > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded bg-xhs text-white">{s.newCount} 新增</span>}
                     </div>

@@ -30,5 +30,17 @@ async function bootstrap() {
   const port = Number(process.env.PORT || 3322);
   await app.listen(port);
   console.log(`style-atlas server on http://localhost:${port}`);
+
+  // 启动时把卡住的 running session 标记为 failed（pm2重启会杀掉异步搜索）
+  import('./database/db.js').then(async ({ db, schema }) => {
+    const { eq } = await import('drizzle-orm');
+    const stuck = await db.select().from(schema.searchSessions);
+    for (const s of stuck) {
+      if (s.status === 'running') {
+        await db.update(schema.searchSessions).set({ status: 'failed' }).where(eq(schema.searchSessions.id, s.id));
+        console.log(`[startup] 卡住的 session ${s.id} 标记为 failed`);
+      }
+    }
+  }).catch(() => {});
 }
 bootstrap();
