@@ -74,11 +74,11 @@ export const artworks = mysqlTable('artworks', {
 // 操作记录（审计日志 + 撤销）
 export const operations = mysqlTable('operations', {
   id: bigint('id', { mode: 'number' }).autoincrement().primaryKey(),
-  type: varchar('type', { length: 64 }),              // artwork_delete/artwork_create/artwork_confirm/artist_create/artist_engage/crawl_import/promote
-  targetType: varchar('target_type', { length: 32 }), // artwork/artist/candidate
+  type: varchar('type', { length: 64 }),
+  targetType: varchar('target_type', { length: 32 }),
   targetId: bigint('target_id', { mode: 'number' }),
   summary: varchar('summary', { length: 255 }),
-  payload: json('payload'),                           // 撤销用快照
+  payload: json('payload'),
   undoable: tinyint('undoable').default(0),
   undone: tinyint('undone').default(0),
   createdAt: datetime('created_at').default(sql`now()`),
@@ -86,6 +86,13 @@ export const operations = mysqlTable('operations', {
   typeIdx: index('idx_op_type').on(t.type),
   targetIdx: index('idx_op_target').on(t.targetType, t.targetId),
 }));
+
+// 系统设置（key-value，存 cookie 等）
+export const settings = mysqlTable('settings', {
+  key: varchar('key', { length: 64 }).primaryKey(),
+  value: text('value'),
+  updatedAt: datetime('updated_at').default(sql`now()`).$onUpdateFn(() => new Date()),
+});
 
 // 作品 ↔ 标签
 export const artworkTags = mysqlTable('artwork_tags', {

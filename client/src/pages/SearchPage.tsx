@@ -24,6 +24,13 @@ export function SearchPage() {
   const tagsQ = useTags();
   const [selectedRef, setSelectedRef] = useState<number | null>(null);
   const [tagModes, setTagModes] = useState<Record<number, 'must' | 'fuzzy'>>({});
+  const [xhsCookie, setXhsCookie] = useState('');
+  const [cookieSaved, setCookieSaved] = useState(false);
+  const [cookieStatus, setCookieStatus] = useState<{hasCookie: boolean} | null>(null);
+
+  useEffect(() => {
+    fetch(BASE + '/settings/xhs-cookie').then(r => r.json()).then(setCookieStatus);
+  }, [cookieSaved]);
   const [fuzzyRatio, setFuzzyRatio] = useState(0.5);
   const [searching, setSearching] = useState(false);
   const [activeSession, setActiveSession] = useState<number | null>(null);
@@ -130,8 +137,22 @@ export function SearchPage() {
   const sessions = sessionsQ.data ?? [];
   const results = resultsQ.data ?? [];
 
+  const saveCookie = () => {
+    if (!xhsCookie.trim()) return;
+    fetch(BASE + '/settings/xhs-cookie', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: xhsCookie.trim() }) })
+      .then(() => { setCookieSaved(true); setXhsCookie(''); setTimeout(() => setCookieSaved(false), 2000); });
+  };
+
   return (
     <div className="max-w-[1600px] mx-auto px-3 md:px-6 py-3">
+      {/* 小红书 Cookie 管理 */}
+      <div className="bg-white rounded-2xl p-3 border border-stone-100 mb-3 flex items-center gap-2 flex-wrap">
+        <span className="text-[12px] text-stone-500 shrink-0">🔑 小红书 Cookie：</span>
+        {cookieStatus?.hasCookie ? <span className="text-[11px] text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">已设置</span> : <span className="text-[11px] text-rose-500 bg-rose-50 px-2 py-0.5 rounded-full">未设置（搜索无结果）</span>}
+        <input value={xhsCookie} onChange={e => setXhsCookie(e.target.value)} placeholder="粘贴小红书 cookie（F12 → Network → Cookie 请求头）" className="flex-1 min-w-[200px] text-[12px] border border-stone-200 rounded-full px-3 py-1.5" />
+        <button onClick={saveCookie} disabled={!xhsCookie.trim()} className="text-[12px] bg-xhs text-white rounded-full px-3 py-1.5 font-medium disabled:opacity-40">{cookieSaved ? '✓ 已保存' : '保存'}</button>
+      </div>
+
       {/* 上传区 */}
       <div className="bg-white rounded-2xl p-4 border border-stone-100 mb-3">
         <h2 className="font-semibold text-stone-800 text-[15px] mb-2">寻源 · 上传参考图</h2>

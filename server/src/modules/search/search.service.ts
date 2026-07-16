@@ -10,6 +10,7 @@ import { searchBaiduImages } from '../crawl/baidu.js';
 import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
 import { logOperation } from '../operation/op.js';
 import { loadTaxonomy, extractJson, normalizeOutput, callBoth } from '../tagging/ai.js';
+import { SettingsService } from '../settings/settings.service.js';
 
 export class SearchService {
   // 发起搜索：创建 session → 各平台搜索 → 存结果 → 标记 isNew
@@ -35,7 +36,7 @@ export class SearchService {
     // 异步执行，不阻塞响应
     this.executeSearch(sessionId, body, prevSession).catch(e => {
       console.error(`[search] session ${sessionId} 失败: ${e.message}`);
-      db.update(schema.searchSessions).set({ status: 'failed' }).where(eq(schema.searchSessions.id, sessionId));
+      db.update(schema.searchSessions).set({ status: 'failed' }).where(eq(schema.searchSessions.id, sessionId)).then(() => {});
     });
 
     return { sessionId, status: 'running' };
@@ -43,7 +44,8 @@ export class SearchService {
 
   private async executeSearch(sessionId: number, body: any, prevSession: number | null) {
     const platforms = body.platforms ?? ['xiaohongshu'];
-    const xhsCookie = process.env.XHS_COOKIE || '';
+    const settingsSvc = new SettingsService();
+    const xhsCookie = await settingsSvc.getXhsCookie();
     const fuzzyRatio = body.fuzzyRatio ?? 0.5;
 
     // 加载维度表，解析每个标签的顶层 code（genre/technique/...）

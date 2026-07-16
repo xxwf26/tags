@@ -7,8 +7,9 @@ import { CandidateModule } from './modules/candidate/candidate.module.js';
 import { OperationModule } from './modules/operation/operation.module.js';
 import { ReferenceModule } from './modules/reference/reference.module.js';
 import { SearchModule } from './modules/search/search.module.js';
+import { SettingsModule } from './modules/settings/settings.module.js';
 
 @Module({
-  imports: [TagModule, ArtworkModule, ArtistModule, TaggingModule, CandidateModule, OperationModule, ReferenceModule, SearchModule],
+  imports: [TagModule, ArtworkModule, ArtistModule, TaggingModule, CandidateModule, OperationModule, ReferenceModule, SearchModule, SettingsModule],
 })
 export class AppModule {}
