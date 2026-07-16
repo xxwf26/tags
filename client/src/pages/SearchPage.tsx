@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import type { SearchResult } from '../api';
 import { useReferences, useUploadReference, useUpdateReferenceTags, useStartSearch, useSearchSessions, useSearchResults, useReviewSearchResult, usePromoteSearchResult, useRejectSearchResult, useDeleteReference, useTags } from '../hooks';
 import { tagsByTopDim } from '../api';
+const BASE = '/api';
 
 const TIER_LABEL: Record<string, { label: string; cls: string }> = {
   tier1: { label: '一级库', cls: 'text-stone-500 bg-stone-100' },
@@ -31,6 +32,7 @@ export function SearchPage() {
 
   const startSearchM = useStartSearch();
   const sessionsQ = useSearchSessions(selectedRef ?? 0);
+  const refetchSessions = sessionsQ.refetch;
   const resultsQ = useSearchResults(activeSession ?? 0);
   const reviewM = useReviewSearchResult();
   const promoteM = usePromoteSearchResult();
@@ -93,7 +95,26 @@ export function SearchPage() {
       return { tagId: id, label: t?.label ?? '', dimensionId: t?.dimensionId ?? null, mode: tagModes[id] };
     });
     startSearchM.mutate({ referenceId: selectedRef, tags, platforms: ['xiaohongshu'], fuzzyRatio }, {
-      onSuccess: (r) => { setActiveSession(r.sessionId); setSearching(false); },
+      onSuccess: (r) => {
+        setActiveSession(r.sessionId);
+        // 轮询搜索状态
+        const poll = setInterval(() => {
+          refetchSessions();
+          // 检查 session 状态
+          fetch(BASE + '/search/sessions?referenceId=' + selectedRef)
+            .then(r => r.json())
+            .then((sessions: any[]) => {
+              const cur = sessions.find(s => s.id === r.sessionId);
+              if (cur && cur.status !== 'running') {
+                clearInterval(poll);
+                setSearching(false);
+                refetchSessions();
+                // 自动选中新 session 的结果
+                setActiveSession(r.sessionId);
+              }
+            });
+        }, 3000);
+      },
       onError: () => setSearching(false),
     });
   };
@@ -167,7 +188,10 @@ export function SearchPage() {
                 <span className="text-xhs font-medium">{Math.round(fuzzyRatio * 100)}%</span>
               </div>
               <div className="flex gap-2 mt-2">
-                <button onClick={saveTags} className="text-[12px] text-stone-600 border border-stone-200 rounded-full px-3 py-1.5 hover:bg-stone-50">保存标签</button>
+                <button onClick={doSearch} disabled={searching}
+                  className="text-[12px] bg-xhs text-white rounded-full px-4 py-1.5 font-medium disabled:opacity-50">
+                  {searching ? '搜索中…（后台运行，可等结果）' : '🔍 按标签搜索'}
+                </button>
                 <button onClick={doSearch} disabled={searching}
                   className="text-[12px] bg-xhs text-white rounded-full px-4 py-1.5 font-medium disabled:opacity-50">
                   {searching ? '搜索中…（约30-60秒）' : '🔍 按标签搜索'}

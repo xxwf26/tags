@@ -19,6 +19,29 @@ export class SearchService {
     tags: { tagId: number; label: string; dimensionId: number | null; mode: 'must' | 'fuzzy' }[];
     platforms?: string[]; fuzzyRatio?: number;
   }) {
+    // 先创建 session 返回 sessionId，后台异步执行搜索
+    const prevSessions = await db.select().from(schema.searchSessions)
+      .where(eq(schema.searchSessions.referenceImageId, body.referenceId)).orderBy(desc(schema.searchSessions.id));
+    const prevSession = prevSessions[0]?.id ?? null;
+    const [sr] = await db.insert(schema.searchSessions).values({
+      referenceImageId: body.referenceId,
+      parentSessionId: prevSession,
+      searchTags: { tags: body.tags, fuzzyRatio: body.fuzzyRatio ?? 0.5 },
+      platforms: body.platforms ?? ['xiaohongshu'],
+      status: 'running',
+    });
+    const sessionId = (sr as any).insertId;
+
+    // 异步执行，不阻塞响应
+    this.executeSearch(sessionId, body, prevSession).catch(e => {
+      console.error(`[search] session ${sessionId} 失败: ${e.message}`);
+      db.update(schema.searchSessions).set({ status: 'failed' }).where(eq(schema.searchSessions.id, sessionId));
+    });
+
+    return { sessionId, status: 'running' };
+  }
+
+  private async executeSearch(sessionId: number, body: any, prevSession: number | null) {
     const platforms = body.platforms ?? ['xiaohongshu'];
     const xhsCookie = process.env.XHS_COOKIE || '';
     const fuzzyRatio = body.fuzzyRatio ?? 0.5;
@@ -34,27 +57,12 @@ export class SearchService {
     };
 
     // 必中的 genre 画风标签 → 米画师搜索关键词
-    const mustGenreTags = body.tags.filter(t => t.mode === 'must' && rootCodeOf(t.dimensionId) === 'genre');
+    const mustGenreTags = body.tags.filter((t: any) => t.mode === 'must' && rootCodeOf(t.dimensionId) === 'genre');
     // 如果没有必中 genre，退而用所有 genre 标签（含模糊）
-    const allGenreTags = body.tags.filter(t => rootCodeOf(t.dimensionId) === 'genre');
-    const searchKeywords = (mustGenreTags.length ? mustGenreTags : allGenreTags).map(t => t.label);
+    const allGenreTags = body.tags.filter((t: any) => rootCodeOf(t.dimensionId) === 'genre');
+    const searchKeywords = (mustGenreTags.length ? mustGenreTags : allGenreTags).map((t: any) => t.label);
 
-    // 找上一次 session（迭代链）
-    const prevSessions = await db.select().from(schema.searchSessions)
-      .where(eq(schema.searchSessions.referenceImageId, body.referenceId)).orderBy(desc(schema.searchSessions.id));
-    const prevSession = prevSessions[0]?.id ?? null;
-
-    // 创建新 session（存标签快照 + 模糊比例）
-    const [sr] = await db.insert(schema.searchSessions).values({
-      referenceImageId: body.referenceId,
-      parentSessionId: prevSession,
-      searchTags: { tags: body.tags, fuzzyRatio },
-      platforms,
-      status: 'running',
-    });
-    const sessionId = (sr as any).insertId;
-
-    // 取上一次的结果（用于 isNew 判断）
+    // 取上一次的结果（用于 isNew 判断）—— prevSession 从参数传入
     const prevResults = prevSession ? await db.select().from(schema.searchResults)
       .where(eq(schema.searchResults.sessionId, prevSession)) : [];
     const prevHashes = new Set(prevResults.map(r => r.imageHash).filter(Boolean));

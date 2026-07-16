@@ -161,7 +161,7 @@ export type XhsSearchResult = {
 // 过滤视频帖 + 广告帖，提取每帖全部图片
 // 共享浏览器单例（避免每次搜索弹窗）
 let _xhsBrowser: any = null;
-async function getXhsBrowser() {
+export async function getXhsBrowser() {
   if (!_xhsBrowser || !_xhsBrowser.isConnected()) {
     const { chromium } = await import('playwright');
     _xhsBrowser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'] });
