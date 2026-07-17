@@ -29,7 +29,7 @@ export function SearchPage() {
   const [cookieStatus, setCookieStatus] = useState<{hasCookie: boolean} | null>(null);
 
   useEffect(() => {
-    fetch(BASE + '/settings/xhs-cookie').then(r => r.json()).then(setCookieStatus);
+    fetch(BASE + '/settings/xhs-cookie').then(res => res.json()).then(setCookieStatus);
   }, [cookieSaved]);
   const [fuzzyRatio, setFuzzyRatio] = useState(0.5);
   const [searching, setSearching] = useState(false);
@@ -150,7 +150,7 @@ export function SearchPage() {
           refetchSessions();
           resultsQ.refetch();
           fetch(BASE + '/search/sessions?referenceId=' + selectedRef)
-            .then(r => r.json())
+            .then(res => res.json())
             .then((sessions: any[]) => {
               const cur = sessions.find(s => s.id === r.sessionId);
               // 更新进度
