@@ -34,6 +34,7 @@ export function SearchPage() {
   const [fuzzyRatio, setFuzzyRatio] = useState(0.5);
   const [searching, setSearching] = useState(false);
   const [activeSession, setActiveSession] = useState<number | null>(null);
+  const [progress, setProgress] = useState<{ total: number; processed: number; startTime: string } | null>(null);
   const [viewResult, setViewResult] = useState<any>(null);
   const [viewImgIdx, setViewImgIdx] = useState(0);
 
@@ -147,15 +148,18 @@ export function SearchPage() {
         setActiveSession(r.sessionId);
         const poll = setInterval(() => {
           refetchSessions();
-          // 也刷新结果（增量写入时能看到结果陆续出现）
           resultsQ.refetch();
           fetch(BASE + '/search/sessions?referenceId=' + selectedRef)
             .then(r => r.json())
             .then((sessions: any[]) => {
               const cur = sessions.find(s => s.id === r.sessionId);
+              // 更新进度
+              const p = cur?.searchTags?.progress;
+              if (p) setProgress({ total: p.total, processed: p.processed, startTime: p.startTime });
               if (cur && cur.status !== 'running') {
                 clearInterval(poll);
                 setSearching(false);
+                setProgress(null);
                 refetchSessions();
                 resultsQ.refetch();
                 setActiveSession(r.sessionId);
@@ -252,8 +256,16 @@ export function SearchPage() {
               <div className="flex gap-2 mt-2 flex-wrap items-center">
                 <button onClick={doSearch} disabled={searching}
                   className="text-[12px] bg-xhs text-white rounded-full px-4 py-1.5 font-medium disabled:opacity-50">
-                  {searching ? '搜索中…（结果陆续出现）' : '🔍 按标签搜索'}
+                  {searching ? '搜索中…' : '🔍 按标签搜索'}
                 </button>
+                {searching && progress && progress.total > 0 && (() => {
+                  const pct = Math.round(progress.processed / progress.total * 100);
+                  const elapsed = (Date.now() - new Date(progress.startTime).getTime()) / 1000;
+                  const avgPerItem = progress.processed > 0 ? elapsed / progress.processed : 0;
+                  const remaining = Math.round(avgPerItem * (progress.total - progress.processed));
+                  const etaStr = remaining > 60 ? `~${Math.ceil(remaining / 60)}分钟` : `~${remaining}秒`;
+                  return <span className="text-[11px] text-stone-500">{pct}%（{progress.processed}/{progress.total}）· 预计剩余 {etaStr}</span>;
+                })()}
                 {searching && (
                   <button onClick={() => {
                     fetch(BASE + '/search/abort/' + activeSession, { method: 'POST' }).then(() => { setSearching(false); refetchSessions(); });

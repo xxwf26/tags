@@ -57,6 +57,8 @@ export class SearchService {
 
   private async executeSearch(sessionId: number, body: any, prevSession: number | null) {
     const isAborted = () => runningSearches.get(sessionId) === true;
+    let progressTotal = 0, progressProcessed = 0;
+    const progressStart = Date.now();
     const platforms = body.platforms ?? ['xiaohongshu'];
     const settingsSvc = new SettingsService();
     const xhsCookie = await settingsSvc.getXhsCookie();
@@ -132,9 +134,11 @@ export class SearchService {
               if (isAborted()) { console.log(`[search] session ${sessionId} 已终止`); break; }
               const notes = await searchXhsByKeyword(kw, 300, xhsCookie);
               console.log(`[search] 小红书 "${kw}": ${notes.length} 帖，开始 AI 筛选（增量写入）...`);
+              progressTotal += notes.length;
               let kept = 0, skipNotArt = 0, skipDup = 0, skipLowQ = 0;
               for (const n of notes) {
-                if (isAborted()) { console.log(`[search] session ${sessionId} 已终止（已处理 ${kept} 张）`); break; }
+                if (isAborted()) { console.log(`[search] session ${sessionId} 已终止（已处理 ${progressProcessed} 张）`); break; }
+                progressProcessed++;
                 if (!n.images.length) { skipNotArt++; continue; }
                 let isArtwork = false;
                 let quality = 0;
@@ -195,7 +199,7 @@ export class SearchService {
                 // 每10张更新一次 session 计数（前端轮询能看到进度）
                 if (kept % 3 === 0) {
                   await db.update(schema.searchSessions).set({ resultCount: totalResults, newCount: newResults }).where(eq(schema.searchSessions.id, sessionId));
-                  console.log(`[search] 进度: 已保留 ${kept} 张（非绘画 ${skipNotArt}，低质 ${skipLowQ}，重复 ${skipDup}）`);
+                  console.log(`[search] 进度: ${progressProcessed}/${progressTotal} 已处理，保留 ${kept} 张（非绘画 ${skipNotArt}，低质 ${skipLowQ}，重复 ${skipDup}）`);
                 }
               }
               console.log(`[search] 小红书 "${kw}" 筛选完成: 保留 ${kept}，非绘画 ${skipNotArt}，低质 ${skipLowQ}，重复 ${skipDup}`);
@@ -242,7 +246,12 @@ export class SearchService {
       }
     }
 
-    await db.update(schema.searchSessions).set({ status: 'ok', resultCount: totalResults, newCount: newResults }).where(eq(schema.searchSessions.id, sessionId));
+    // 最终更新：包含进度信息（前端算百分比/ETA用）
+    const elapsed = Date.now() - progressStart;
+    await db.update(schema.searchSessions).set({
+      status: 'ok', resultCount: totalResults, newCount: newResults,
+      searchTags: { tags: body.tags, fuzzyRatio, progress: { total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString(), elapsedMs: elapsed } },
+    }).where(eq(schema.searchSessions.id, sessionId));
     await logOperation({ type: 'search_start', targetType: 'reference', targetId: body.referenceId, summary: `寻源搜索 #${sessionId}：${totalResults} 结果（${newResults} 新增）` });
     return { sessionId, resultCount: totalResults, newCount: newResults };
   }
