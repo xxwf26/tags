@@ -141,6 +141,10 @@ export class SearchService {
                 if (isAborted()) { console.log(`[search] session ${sessionId} 已终止（已处理 ${progressProcessed} 张）`); break; }
                 progressProcessed++;
                 if (!n.images.length) { skipNotArt++; continue; }
+                // 文字预筛：标题/标签明显与绘画无关的跳过（不浪费AI调用）
+                const noteText = (n.title || '') + ' ' + (n.xhsTags || []).join(' ');
+                const NON_ART_TEXT = ['穿搭','美食','旅游','健身','减肥','化妆','护肤','发型','美甲','自拍','日常','vlog','探店','测评','开箱','装修','家居','宠物','猫','狗','宝宝','育儿','婚礼','毕业','生日','聚会','打卡','旅行','酒店','机票','购物','好物','种草','清单','攻略','教程','菜谱','食谱','运动','跑步','瑜伽','舞蹈','唱歌','翻唱','游戏','直播','抽奖','送','福利','红包','兼职','招聘','租房','二手房','买车','学车','考','证','报','课'];
+                if (NON_ART_TEXT.some(kw => noteText.includes(kw))) { skipNotArt++; continue; }
                 let isArtwork = false;
                 let quality = 0;
                 let aiTags: any[] = [];
@@ -155,19 +159,13 @@ export class SearchService {
                   }
                   const b64 = buf.toString('base64');
                   const mime = 'image/jpeg';
-                  const { gemini, doubao } = await callBoth(b64, mime, tax.prompt);
+                  const { gemini } = await callBoth(b64, mime, tax.prompt);
                   const gParsed = extractJson(gemini);
-                  const dParsed = extractJson(doubao);
-                  const gArt = gParsed?.is_artwork === true;
-                  const dArt = dParsed?.is_artwork === true;
-                  const gQ = Number(gParsed?.quality) || 0;
-                  const dQ = Number(dParsed?.quality) || 0;
-                  isArtwork = gArt || dArt;
-                  quality = Math.max(gQ, dQ);
+                  isArtwork = gParsed?.is_artwork === true;
+                  quality = Number(gParsed?.quality) || 0;
                   if (isArtwork) {
                     const gIds = normalizeOutput(gParsed, tax.labelMap);
-                    const dIds = normalizeOutput(dParsed, tax.labelMap);
-                    const allIds = new Set([...gIds, ...dIds]);
+                    const allIds = new Set([...gIds]);
                     const tagRows = allIds.size ? await db.select().from(schema.tags).where(inArray(schema.tags.id, [...allIds])) : [];
                     aiTags = tagRows.map(t => ({ tagId: t.id, label: t.label, dimensionId: t.dimensionId, rootCode: rootCodeOf(t.dimensionId) }));
                   }
