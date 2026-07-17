@@ -3,7 +3,7 @@ import { SearchService } from './search.service.js';
 
 @Controller('search')
 export class SearchController {
-  private readonly searchService = new SearchService();
+  constructor(private readonly searchService: SearchService) {}
 
   // 发起搜索：POST /api/search/start {referenceId, tags, platforms}
   @Post('start')

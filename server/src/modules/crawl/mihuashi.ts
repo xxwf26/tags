@@ -5,7 +5,18 @@
 // 共享浏览器实例，避免反复启动。
 import { chromium, type Browser, type BrowserContext } from 'playwright';
 
-export type MhsArtwork = { mhsId: number; imageUrl: string; width: number | null; height: number | null };
+export type MhsArtwork = { mhsId: number; imageUrl: string; width: number | null; height: number | null; author: string | null; authorUrl: string | null };
+
+// 从 search API 响应的单条作品里尽力提取画师名/主页（字段名跨版本不稳，多候选兜底）
+function extractAuthor(a: any): { author: string | null; authorUrl: string | null } {
+  const u = a?.author || a?.user || a?.painter || a?.creator || null;
+  const author = a?.author_name || a?.nickname || u?.name || u?.nickname || u?.username || null;
+  const pid = a?.author_id || a?.user_id || u?.id || u?.profile_id || null;
+  return {
+    author: author ? String(author).trim() : null,
+    authorUrl: pid ? `https://www.mihuashi.com/profiles/${pid}` : null,
+  };
+}
 
 const STEALTH_ARGS = ['--disable-blink-features=AutomationControlled', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'];
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
@@ -45,7 +56,8 @@ export async function searchMihuashi(tagName: string, limit = 30): Promise<MhsAr
         for (const a of j.artworks || []) {
           if (a.id && !seen.has(a.id)) {
             seen.add(a.id);
-            arts.push({ mhsId: a.id, imageUrl: a.url, width: a.width ?? null, height: a.height ?? null });
+            const { author, authorUrl } = extractAuthor(a);
+            arts.push({ mhsId: a.id, imageUrl: a.url, width: a.width ?? null, height: a.height ?? null, author, authorUrl });
           }
         }
       } catch {}
@@ -105,7 +117,8 @@ export async function fetchMihuashiArtistWorks(profileId: string, authPath: stri
         for (const a of j.artworks || []) {
           if (a.id && a.url && !seen.has(a.id)) {
             seen.add(a.id);
-            arts.push({ mhsId: a.id, imageUrl: a.url, width: a.width ?? null, height: a.height ?? null });
+            const { author, authorUrl } = extractAuthor(a);
+            arts.push({ mhsId: a.id, imageUrl: a.url, width: a.width ?? null, height: a.height ?? null, author, authorUrl });
           }
         }
       } catch {}

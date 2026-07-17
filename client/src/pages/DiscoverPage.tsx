@@ -168,15 +168,41 @@ export function DiscoverPage() {
       {/* 结果 */}
       {task?.status === 'ok' && (
         <div>
-          <div className="text-[13px] text-stone-500 mb-2 px-1">按质量分排序 · {results.length} 张（AI 已过滤广告/照片/低质）</div>
-          {!results.length && <div className="text-center text-stone-400 py-12">没有符合质量的结果，换个画风或平台试试</div>}
+          {/* 漏斗：让"0 结果 / 结果少"能看清卡在哪个环节 */}
+          {task.stats && (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-stone-400 mb-2 px-1">
+              <span>召回 <b className="text-stone-600">{task.stats.recalled}</b></span>
+              <span>· 去重后 {task.stats.unique}</span>
+              {task.stats.dedup > 0 && <span>· 库内重复 -{task.stats.dedup}</span>}
+              {task.stats.downloadFail > 0 && <span>· 下载失败 -{task.stats.downloadFail}</span>}
+              {task.stats.notArtwork > 0 && <span>· 非绘画 -{task.stats.notArtwork}</span>}
+              {task.stats.lowQuality > 0 && <span>· 低质 -{task.stats.lowQuality}</span>}
+              {task.stats.lowSimilarity > 0 && <span>· 画风不符 -{task.stats.lowSimilarity}</span>}
+              <span>· 保留 <b className="text-emerald-600">{task.stats.kept}</b></span>
+              {task.stats.aiSkipped > 0 && <span className="text-amber-600">⚠ {task.stats.aiSkipped} 张未经 AI 质检（未配置 AI_API_KEY 或调用失败），请人工甄别</span>}
+              {task.stats.embedSkipped > 0 && <span className="text-amber-600">⚠ 本次未做视觉精排（CLIP 不可用），仅按质量排序</span>}
+            </div>
+          )}
+          <div className="text-[13px] text-stone-500 mb-2 px-1">{task.mode === 'image' && !task.stats?.embedSkipped ? '按画风相似度×质量排序' : '按质量分排序'} · {results.length} 张（AI 已过滤广告/照片/低质）</div>
+          {!results.length && (
+            <div className="text-center text-stone-400 py-12">
+              {task.stats && task.stats.recalled === 0
+                ? '平台没搜到内容，换个画风关键词或平台试试（小红书需配 XHS_COOKIE）'
+                : task.stats && task.stats.unique > 0
+                ? '召回的图都被去重或质检过滤了，试试放宽画风或换平台'
+                : '没有符合质量的结果，换个画风或平台试试'}
+            </div>
+          )}
           <div className="masonry columns-2 md:columns-3 lg:columns-4 xl:columns-5 2xl:columns-6">
             {results.map(r => (
               <div key={r.id} className="mb-2.5 break-inside-avoid bg-white rounded-xl overflow-hidden border border-stone-100 card-hover">
                 <div className="relative cursor-zoom-in" onClick={() => { setViewResult(r); setViewIdx(0); }}>
                   <img src={r.imageUrl || ''} referrerPolicy="no-referrer" className="w-full object-cover" style={{ aspectRatio: '3/4' }}
                     onError={e => ((e.target as HTMLImageElement).style.opacity = '0.3')} alt="" />
-                  {r.quality != null && <span className="absolute top-2 left-2 text-[10px] px-1.5 py-0.5 rounded bg-black/50 text-white">质 {r.quality.toFixed(0)}</span>}
+                  {r.quality != null
+                    ? <span className="absolute top-2 left-2 text-[10px] px-1.5 py-0.5 rounded bg-black/50 text-white">质 {r.quality.toFixed(0)}</span>
+                    : <span className="absolute top-2 left-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/80 text-white" title="未经 AI 质检，请人工甄别">未检</span>}
+                  {r.similarity != null && <span className="absolute top-2 right-2 text-[10px] px-1.5 py-0.5 rounded bg-xhs/80 text-white" title="与参考图的画风相似度">似 {(r.similarity * 100).toFixed(0)}</span>}
                   <span className="absolute bottom-2 right-2 text-[10px] px-1.5 py-0.5 rounded bg-black/40 text-white">{PLATFORM_LABEL[r.platform] || r.platform}</span>
                 </div>
                 <div className="p-2">
