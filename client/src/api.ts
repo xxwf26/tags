@@ -251,3 +251,33 @@ export async function fetchReferenceDetail(id: number) {
   if (!r.ok) throw new Error('detail failed');
   return r.json();
 }
+
+// ============ 发现（按画风搜作品，独立于寻源） ============
+export type DiscoverResult = {
+  id: number; sessionId: number; platform: string;
+  sourceUrl: string | null; imageUrl: string | null; title: string | null; author: string | null;
+  tags: string[]; allImages: string[] | null; imageHash: string | null; quality: number | null;
+  tier: 'tier1' | 'tier2' | 'promoted' | 'rejected'; promotedArtworkId: number | null; createdAt: string;
+};
+export type DiscoverTask = { status: string; done: number; total: number; resultCount: number; mode: 'image' | 'tags' };
+// 发起发现：referenceId(可选) + tags(可选 [{label}]) + platforms
+export async function startDiscover(body: { referenceId?: number | null; tags?: { label: string }[]; platforms?: string[] }): Promise<{ sessionId: number; mode: 'image' | 'tags' }> {
+  const r = await fetch(BASE + '/discover/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error('discover failed'); return r.json();
+}
+export async function fetchDiscoverTask(sessionId: number): Promise<DiscoverTask> {
+  const r = await fetch(BASE + '/discover/task/' + sessionId); if (!r.ok) throw new Error('task failed'); return r.json();
+}
+export async function fetchDiscoverResults(sessionId: number, tier?: string): Promise<DiscoverResult[]> {
+  const q = tier ? '&tier=' + tier : '';
+  const r = await fetch(BASE + '/discover/results?sessionId=' + sessionId + q); if (!r.ok) throw new Error('results failed'); return r.json();
+}
+export async function reviewDiscover(id: number) {
+  const r = await fetch(BASE + '/discover/results/' + id + '/review', { method: 'POST' }); if (!r.ok) throw new Error('review failed'); return r.json();
+}
+export async function promoteDiscover(id: number) {
+  const r = await fetch(BASE + '/discover/results/' + id + '/promote', { method: 'POST' }); if (!r.ok) throw new Error('promote failed'); return r.json();
+}
+export async function rejectDiscover(id: number) {
+  const r = await fetch(BASE + '/discover/results/' + id + '/reject', { method: 'POST' }); if (!r.ok) throw new Error('reject failed'); return r.json();
+}

@@ -135,11 +135,15 @@ export const referenceImages = mysqlTable('reference_images', {
 // 搜索会话：每次搜索 = 一个 session（不覆盖，迭代链）
 export const searchSessions = mysqlTable('search_sessions', {
   id: bigint('id', { mode: 'number' }).autoincrement().primaryKey(),
-  referenceImageId: bigint('reference_image_id', { mode: 'number' }).notNull(),
+  referenceImageId: bigint('reference_image_id', { mode: 'number' }),  // 可空：纯标签搜无参考图
   parentSessionId: bigint('parent_session_id', { mode: 'number' }),  // 上一次 session（迭代链）
+  mode: varchar('mode', { length: 16 }).default('tags'),   // 'image'=以图找相近 | 'tags'=按标签搜
+  refEmbedding: json('ref_embedding'),            // 参考图 CLIP 向量快照（image 模式）
   searchTags: json('search_tags'),                // 本次搜索标签快照 [{tagId, label, dimensionId}]
   platforms: json('platforms'),                   // ["mihuashi","xiaohongshu","weibo"]
   status: mysqlEnum('status', ['running', 'ok', 'failed']).default('running'),
+  doneCount: int('done_count').default(0),        // 已处理候选数（进度）
+  totalCount: int('total_count').default(0),      // 候选池总数（进度分母）
   resultCount: int('result_count').default(0),
   newCount: int('new_count').default(0),          // vs 上一次 session 新增的
   createdAt: datetime('created_at').default(sql`now()`),
@@ -151,7 +155,7 @@ export const searchSessions = mysqlTable('search_sessions', {
 export const searchResults = mysqlTable('search_results', {
   id: bigint('id', { mode: 'number' }).autoincrement().primaryKey(),
   sessionId: bigint('session_id', { mode: 'number' }).notNull(),
-  referenceImageId: bigint('reference_image_id', { mode: 'number' }).notNull(),
+  referenceImageId: bigint('reference_image_id', { mode: 'number' }),  // 可空：纯标签搜无参考图
   platform: varchar('platform', { length: 32 }),   // xiaohongshu/mihuashi/weibo
   sourceUrl: varchar('source_url', { length: 512 }),
   imageUrl: varchar('image_url', { length: 512 }),  // 外链（不落盘直到 promote）
@@ -162,6 +166,8 @@ export const searchResults = mysqlTable('search_results', {
   aiTags: json('ai_tags'),                         // AI 给这张图打的标签（可选）
   allImages: json('all_images'),                   // 该帖所有图片URL（一帖多图）
   imageHash: char('image_hash', { length: 16 }),
+  similarity: float('similarity'),                 // 与参考图的 CLIP 余弦相似度 0~1（image 模式；tags 模式为 null）
+  quality: float('quality'),                       // AI 质检质量分 0~10
   isNew: tinyint('is_new').default(1),             // vs 上一次 session 是否新增
   tier: mysqlEnum('tier', ['tier1', 'tier2', 'promoted', 'rejected']).default('tier1'),
   promotedArtworkId: bigint('promoted_artwork_id', { mode: 'number' }),
