@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { SearchResult } from '../api';
 import { useReferences, useUploadReference, useUpdateReferenceTags, useStartSearch, useSearchSessions, useSearchResults, useReviewSearchResult, usePromoteSearchResult, useRejectSearchResult, useDeleteReference, useTags } from '../hooks';
 import { tagsByTopDim } from '../api';
@@ -72,14 +72,47 @@ export function SearchPage() {
     return () => window.removeEventListener('paste', onPaste);
   }, [loadFile]);
 
-  // 选中参考图时初始化标签模式
+  // 切换参考图前自动保存当前标签（不丢失）
+  const prevRefRef = useRef<number | null>(null);
   useEffect(() => {
+    // 切换走之前，把当前标签存到旧参考图
+    if (prevRefRef.current !== null && prevRefRef.current !== selectedRef) {
+      const prevRef = (refsQ.data ?? []).find(r => r.id === prevRefRef.current);
+      if (prevRef) {
+        const allTags: { id: number; label: string; dimensionId: number }[] = [];
+        for (const top of (tagsQ.data ?? [])) {
+          for (const t of top.tags) allTags.push({ id: t.id, label: t.label, dimensionId: top.id });
+          for (const sub of top.children) for (const t of sub.tags) allTags.push({ id: t.id, label: t.label, dimensionId: sub.id });
+        }
+        const manualTags = Object.keys(tagModes).map(id => {
+          const t = allTags.find(a => a.id === Number(id));
+          return { tagId: Number(id), label: t?.label ?? '', dimensionId: t?.dimensionId ?? null };
+        });
+        fetch(BASE + '/reference/' + prevRefRef.current + '/tags', {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ manualTags }),
+        });
+      }
+    }
+    prevRefRef.current = selectedRef;
+
+    // 加载新参考图的标签
     if (ref) {
       const modes: Record<number, 'must' | 'fuzzy'> = {};
       (ref.manualTags ?? ref.aiTags ?? []).forEach(t => { modes[t.tagId] = 'fuzzy'; });
       setTagModes(modes);
     }
   }, [selectedRef]);
+
+  // 从其他参考图导入标签（合并）
+  const [showMerge, setShowMerge] = useState(false);
+  const mergeTags = (fromRefId: number) => {
+    const fromRef = (refsQ.data ?? []).find(r => r.id === fromRefId);
+    if (!fromRef) return;
+    const m = { ...tagModes };
+    (fromRef.aiTags ?? []).forEach(t => { if (!m[t.tagId]) m[t.tagId] = 'fuzzy'; });
+    setTagModes(m);
+    setShowMerge(false);
+  };
 
   const toggleTag = (id: number) => {
     const m = { ...tagModes };
@@ -216,7 +249,7 @@ export function SearchPage() {
                 <input type="range" min="0" max="100" value={Math.round(fuzzyRatio * 100)} onChange={e => setFuzzyRatio(Number(e.target.value) / 100)} className="w-32 accent-xhs" />
                 <span className="text-xhs font-medium">{Math.round(fuzzyRatio * 100)}%</span>
               </div>
-              <div className="flex gap-2 mt-2">
+              <div className="flex gap-2 mt-2 flex-wrap items-center">
                 <button onClick={doSearch} disabled={searching}
                   className="text-[12px] bg-xhs text-white rounded-full px-4 py-1.5 font-medium disabled:opacity-50">
                   {searching ? '搜索中…（结果陆续出现）' : '🔍 按标签搜索'}
@@ -226,7 +259,23 @@ export function SearchPage() {
                     fetch(BASE + '/search/abort/' + activeSession, { method: 'POST' }).then(() => { setSearching(false); refetchSessions(); });
                   }} className="text-[12px] text-rose-500 border border-rose-300 rounded-full px-3 py-1.5 hover:bg-rose-50">⏹ 终止</button>
                 )}
+                {(refsQ.data ?? []).length > 1 && (
+                  <button onClick={() => setShowMerge(!showMerge)}
+                    className="text-[12px] text-stone-500 border border-stone-200 rounded-full px-3 py-1.5 hover:bg-stone-50">📎 从其他参考图导入标签</button>
+                )}
               </div>
+              {showMerge && (
+                <div className="flex gap-2 mt-2 flex-wrap items-center">
+                  <span className="text-[11px] text-stone-400">选择要导入标签的参考图（合并到当前）：</span>
+                  {(refsQ.data ?? []).filter(r => r.id !== selectedRef).map(r => (
+                    <button key={r.id} onClick={() => mergeTags(r.id)}
+                      className="flex items-center gap-1.5 text-[11px] border border-stone-200 rounded-full px-2 py-1 hover:border-xhs">
+                      <img src={r.imageUrl} className="w-6 h-6 rounded object-cover" alt="" />
+                      <span>{(r.aiTags ?? []).length} 标签</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>
