@@ -50,17 +50,18 @@ function ensureWorker(): Promise<void> {
       return reject(e instanceof Error ? e : new Error(String(e)));
     }
     worker = w;
+    let settled = false;   // readyPromise 是否已敲定——worker ready 之后再崩就不能再 reject 它了
 
     const onDead = (err: Error) => {
       rejectAllPending(new Error('CLIP worker 已退出'));
       worker = null;
       readyPromise = null;
       if (++restarts >= MAX_RESTARTS) disabled = true;
-      reject(err);
+      if (!settled) { settled = true; reject(err); }   // 只在 ready 之前才 reject readyPromise
     };
 
     w.on('message', (m: any) => {
-      if (m?.type === 'ready') { resolve(); return; }
+      if (m?.type === 'ready') { settled = true; resolve(); return; }
       if (m?.type === 'fatal') { return; } // 紧跟着会触发 exit，由 onDead 统一处理
       const p = pending.get(m.id);
       if (!p) return;
@@ -69,6 +70,7 @@ function ensureWorker(): Promise<void> {
       if (m.error) p.reject(new Error(m.error));
       else p.resolve(m.embedding);
     });
+    // worker 的 error/exit 事件必须有监听器，否则 error 会冒泡成主进程 uncaughtException → 整个后端崩溃。
     w.on('error', (e) => onDead(e instanceof Error ? e : new Error(String(e))));
     w.on('exit', (code) => { if (code !== 0) onDead(new Error(`CLIP worker 退出码 ${code}`)); });
   });
@@ -88,7 +90,14 @@ export async function embedImage(buf: Buffer): Promise<number[]> {
       reject(new Error('CLIP embedding 超时'));
     }, REQUEST_TIMEOUT);
     pending.set(id, { resolve, reject, timer });
-    worker!.postMessage({ id, buffer: ab }, [ab]);
+    // postMessage 对已死的 worker 会同步抛错——包起来 reject 本请求，避免异常逃逸
+    try {
+      worker!.postMessage({ id, buffer: ab }, [ab]);
+    } catch (e: any) {
+      clearTimeout(timer);
+      pending.delete(id);
+      reject(e instanceof Error ? e : new Error(String(e)));
+    }
   });
 }
 

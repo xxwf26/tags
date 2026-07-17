@@ -5,7 +5,7 @@ import { db, schema } from '../../database/db.js';
 import { eq, desc } from 'drizzle-orm';
 import sharp from 'sharp';
 import { aHash } from '../imghash/imghash.js';
-import { loadTaxonomy, extractJson, normalizeOutput, callBoth } from '../tagging/ai.js';
+import { loadTaxonomy, extractJson, normalizeOutput, callBoth, suggestMihuashiTags } from '../tagging/ai.js';
 import { logOperation } from '../operation/op.js';
 
 export class ReferenceService {
@@ -26,11 +26,14 @@ export class ReferenceService {
     });
     const id = (r as any).insertId;
 
-    // AI 打标（Gemini + 豆包 集成）
+    // AI 打标（Gemini + 豆包 集成）+ 米画师官方标签（供发现页直接搜米画师用）
     const b64 = file.buffer.toString('base64');
     const mime = 'image/jpeg';
     const tax = await loadTaxonomy();
-    const { gemini, doubao } = await callBoth(b64, mime, tax.prompt);
+    const [{ gemini, doubao }, mhsTags] = await Promise.all([
+      callBoth(b64, mime, tax.prompt),
+      suggestMihuashiTags(b64, mime),
+    ]);
     const gIds = normalizeOutput(extractJson(gemini), tax.labelMap);
     const dIds = normalizeOutput(extractJson(doubao), tax.labelMap);
     const both = [...gIds].filter(x => dIds.has(x));
@@ -38,15 +41,19 @@ export class ReferenceService {
 
     // 取标签详情
     const allTagIds = [...gIds, ...dIds];
-    const tagRows = allTagIds.length ? await db.select().from(schema.tags).where(eq(schema.tags.id, allTagIds[0])) : [];
     // 批量取（drizzle inArray）
     const { inArray } = await import('drizzle-orm');
     const tags = allTagIds.length ? await db.select().from(schema.tags).where(inArray(schema.tags.id, allTagIds)) : [];
     const tagById = new Map(tags.map(t => [t.id, t]));
-    const aiTags = [...both, ...one].map(id => {
+    const systemTags = [...both, ...one].map(id => {
       const t = tagById.get(id);
       return { tagId: id, label: t?.label ?? '', dimensionId: t?.dimensionId ?? null, confidence: both.includes(id) ? 0.9 : 0.5 };
     });
+    // 米画师标签置前（tagId=null 标记来源；发现页据 label 预选，命中米画师白名单率高）。
+    // 与系统标签按 label 去重，避免重复项。
+    const sysLabels = new Set(systemTags.map(t => t.label));
+    const mhsAiTags = mhsTags.filter(l => !sysLabels.has(l)).map(l => ({ tagId: null as number | null, label: l, dimensionId: null, confidence: 0.9 }));
+    const aiTags = [...mhsAiTags, ...systemTags];
 
     await db.update(schema.referenceImages).set({ aiTags, status: 'ready' }).where(eq(schema.referenceImages.id, id));
     await logOperation({ type: 'reference_upload', targetType: 'reference', targetId: id, summary: `上传参考图 #${id}，AI打标 ${aiTags.length} 个` });

@@ -10,6 +10,16 @@ import { join } from 'node:path';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import express, { Request, Response, NextFunction } from 'express';
 
+// 进程级兜底：采集用的 playwright/chromium 是易崩组件，其内部若抛出未捕获的异步错误，
+// 默认会直接杀死整个 node 进程（连带 HTTP 服务、其他正在跑的搜索）。这里改成记录不退出——
+// 单次采集失败不该拖垮整个后端。（真正的编程 bug 仍会在日志暴露，便于排查。）
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason instanceof Error ? reason.stack : reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err?.stack || err);
+});
+
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   app.setGlobalPrefix('api');

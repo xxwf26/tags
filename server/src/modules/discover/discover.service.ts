@@ -20,6 +20,20 @@ const PER_KW = 20;          // 每平台每关键词召回上限
 const CONCURRENCY = 6;      // 逐张处理并发度
 const MIN_QUALITY = 5;      // AI 质检质量分下限
 const SIM_FLOOR = 0.2;      // image 模式相似度下限（很宽松，只砍明显不相干；同画风梯度可低至 ~0.58）
+// CLIP 视觉精排总开关。false = 关闭（因 CLIP worker 与 playwright chromium 同进程 segfault，方案A 先保稳定）。
+// 方案B 将 CLIP 移到独立子进程后改回 true。关闭时 image 模式自动退化为纯质量排序。
+const CLIP_ENABLED = false;
+
+// 米画师站内筛选只认这套官方标签（画风 + 类型两个维度）。用它作白名单：
+// 采集靠点击页面上「文字=关键词」的标签按钮，非官方词点不中、只会空跑，故直接跳过。
+const MIHUASHI_TAGS = new Set([
+  // 画风
+  '日系', '平涂', '萌系', '厚涂', '赛璐璐', '古风', '中国风', '童趣', '写实系', '韩系',
+  '少女漫画', '欧美系', '水彩', '美式卡通', '白描', '科幻风', '像素风', '水墨', '硬派',
+  // 类型
+  '头像', '插图', 'Q版', '自设/OC', '立绘', '角色设计', '壁纸', '封面', '场景', '海报',
+  '概念设计', '印花', '图标', 'Live2D', 'CG', '和纸胶带', '像素图', '卡牌', '条漫', 'UI', '版型', '分镜', '抱枕', '特效',
+]);
 
 type Recalled = {
   platform: string; imageUrl: string; sourceUrl: string | null;
@@ -45,7 +59,9 @@ export class DiscoverService {
       if (running) throw new Error('该参考图正在搜索中，请等待完成');
     }
 
-    // image 模式：算参考图 CLIP 向量（现算并缓存）。失败则退化为 tags 行为。
+    // image 模式：算参考图 CLIP 向量。失败/关闭则退化为 tags 行为（纯质量排序）。
+    // ⚠️ CLIP_ENABLED=false：CLIP worker(onnxruntime) 与采集用的 playwright(chromium) 在同一 node 进程内
+    // 共存会触发原生层 segfault，整个后端崩溃。方案A 先关闭视觉精排保稳定；方案B 将把 CLIP 挪到独立子进程后再开启。
     let refEmbedding: number[] | null = null;
     if (referenceId) {
       const [ref] = await db.select().from(schema.referenceImages).where(eq(schema.referenceImages.id, referenceId));
@@ -54,7 +70,7 @@ export class DiscoverService {
         const aiTags = (ref.aiTags as any[]) || [];
         keywords = aiTags.map(t => t.label).filter(Boolean);
       }
-      if (isEmbedAvailable()) {
+      if (CLIP_ENABLED && isEmbedAvailable()) {
         try {
           const refBuf = await readFile(join(process.cwd(), 'uploads', basename(ref.imageUrl)));
           refEmbedding = await embedImage(refBuf);
@@ -94,6 +110,7 @@ export class DiscoverService {
       for (const kw of keywords) {
         try {
           if (platform === 'mihuashi') {
+            if (!MIHUASHI_TAGS.has(kw)) { console.error(`[discover] 米画师跳过非官方标签「${kw}」（点不中、只会空跑）`); continue; }
             const arts = await searchMihuashi(kw, PER_KW);
             for (const a of arts) pool.push({ platform, imageUrl: a.imageUrl, sourceUrl: `https://www.mihuashi.com/artworks/${a.mhsId}`, title: `米画师·${kw}`, author: a.author ?? null, tags: [kw], allImages: [a.imageUrl] });
           } else if (platform === 'weibo') {

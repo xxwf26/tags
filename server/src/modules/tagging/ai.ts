@@ -181,3 +181,30 @@ export async function gateArtwork(b64: string, mime: string): Promise<GateResult
     return { isArtwork: true, quality: 5, category: 'unknown', reason: '', error: (e as Error).message, skipped: true };
   }
 }
+
+// 米画师官方标签（画风 + 类型两维度）。参考图上传时让 AI 直接从这套里选，
+// 结果能直接用于米画师 ?tags 搜索，避免用系统 6 维词表识别出「国风/厚涂写实」等米画师没有的词。
+const MIHUASHI_GENRE = ['日系', '平涂', '萌系', '厚涂', '赛璐璐', '古风', '中国风', '童趣', '写实系', '韩系', '少女漫画', '欧美系', '水彩', '美式卡通', '白描', '科幻风', '像素风', '水墨', '硬派'];
+const MIHUASHI_CATEGORY = ['头像', '插图', 'Q版', '自设/OC', '立绘', '角色设计', '壁纸', '封面', '场景', '海报', '概念设计', '印花', '图标', 'Live2D', 'CG', '和纸胶带', '像素图', '卡牌', '条漫', 'UI', '版型', '分镜', '抱枕', '特效'];
+const MIHUASHI_TAG_SET = new Set([...MIHUASHI_GENRE, ...MIHUASHI_CATEGORY]);
+
+const MIHUASHI_PROMPT = `你是插画风格分析师。看这张参考图，从下面两组「米画师官方标签」里各选最贴切的，用于按画风搜同类作品。
+画风（选 1~3 个）：${MIHUASHI_GENRE.join('、')}
+类型（选 0~2 个）：${MIHUASHI_CATEGORY.join('、')}
+只输出 JSON：{"genre":["..."],"category":["..."]}
+规则：只能选上面列出的原词，禁止自创或改写（如「国风」必须写「中国风」）；不确定的少选。不要输出解释、不要 markdown。`;
+
+// 从参考图选米画师标签。返回命中官方标签的词数组；无 key / 失败时返回空数组（上层退化为手选）。
+export async function suggestMihuashiTags(b64: string, mime: string): Promise<string[]> {
+  if (!isAiConfigured()) return [];
+  try {
+    const raw = await callGemini(b64, mime, MIHUASHI_PROMPT);
+    const parsed = extractJson(raw);
+    if (!parsed) return [];
+    const picked = [...(parsed.genre || []), ...(parsed.category || [])].map((s: any) => String(s).trim());
+    // 严格过滤到官方标签，防 AI 自创词漏网
+    return [...new Set(picked.filter((t: string) => MIHUASHI_TAG_SET.has(t)))];
+  } catch {
+    return [];
+  }
+}
