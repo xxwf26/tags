@@ -256,7 +256,7 @@ export function SearchPage() {
               <div className="flex gap-2 mt-2 flex-wrap items-center">
                 <button onClick={doSearch} disabled={searching}
                   className="text-[12px] bg-xhs text-white rounded-full px-4 py-1.5 font-medium disabled:opacity-50">
-                  {searching ? '搜索中…' : '🔍 按标签搜索'}
+                  {searching ? (progress ? Math.round(progress.processed / progress.total * 100) + '%（' + progress.processed + '/' + progress.total + '）' : '正在搜索小红书帖子…') : '🔍 按标签搜索'}
                 </button>
                 {searching && progress && progress.total > 0 && (() => {
                   const pct = Math.round(progress.processed / progress.total * 100);
