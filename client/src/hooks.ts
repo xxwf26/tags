@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchTags, fetchTagsAll, fetchArtworks, fetchArtists, fetchArtist, createArtwork, deleteArtwork, setArtworkTags, updateEngage, tagArtwork, tagBatch, confirmArtwork, crawlNote, fetchCandidates, promoteCandidate, rejectCandidate, searchByImage, createTag, updateTag, deleteTag, createDimension, crawlMihuashi, fetchMihuashiTags, fetchOperations, undoOperation, redoOperation, type Artwork, type Artist, uploadReference, fetchReferences, updateReferenceTags, startSearch, fetchSearchSessions, fetchSearchResults, reviewSearchResult, promoteSearchResult, rejectSearchResult, deleteReference, startDiscover, fetchDiscoverTask, fetchDiscoverResults, reviewDiscover, promoteDiscover, rejectDiscover } from './api'
+import { fetchTags, fetchTagsAll, fetchArtworks, fetchArtists, fetchArtist, createArtwork, deleteArtwork, setArtworkTags, updateEngage, tagArtwork, tagBatch, confirmArtwork, searchByImage, createTag, updateTag, deleteTag, createDimension, fetchMihuashiFilterChips, fetchOperations, undoOperation, redoOperation, type Artwork, type Artist, uploadReference, fetchReferences, updateReferenceTags, startSearch, fetchSearchSessions, fetchSearchResults, reviewSearchResult, promoteSearchResult, rejectSearchResult, deleteReference, startDiscover, fetchDiscoverTask, fetchDiscoverResults, reviewDiscover, promoteDiscover, rejectDiscover } from './api'
 
 export function useTags() {
   return useQuery({ queryKey: ['tags'], queryFn: fetchTags });
@@ -59,29 +59,8 @@ export function useConfirmArtwork() {
   return useMutation({ mutationFn: (id: number) => confirmArtwork(id),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['artworks'] }); qc.invalidateQueries({ queryKey: ['artist'] }); } });
 }
-export function useCandidates(status = 'pending') {
-  return useQuery({ queryKey: ['candidates', status], queryFn: () => fetchCandidates(status) });
-}
-export function useCrawlNote() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: crawlNote, onSuccess: () => qc.invalidateQueries({ queryKey: ['candidates'] }) });
-}
-export function usePromoteCandidate() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: ({ id, body }: { id: number; body: { artistId?: number; newArtist?: boolean } }) => promoteCandidate(id, body),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['candidates'] }); qc.invalidateQueries({ queryKey: ['artists'] }); qc.invalidateQueries({ queryKey: ['artworks'] }); } });
-}
-export function useRejectCandidate() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: (id: number) => rejectCandidate(id), onSuccess: () => qc.invalidateQueries({ queryKey: ['candidates'] }) });
-}
-export function useMihuashiTags() {
-  return useQuery({ queryKey: ['mihuashi-tags'], queryFn: fetchMihuashiTags, staleTime: 600000 });
-}
-export function useCrawlMihuashi() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: ({ tag, limit }: { tag: string; limit: number }) => crawlMihuashi(tag, limit),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['candidates'] }) });
+export function useMihuashiFilterChips() {
+  return useQuery({ queryKey: ['mihuashi-filter-chips'], queryFn: fetchMihuashiFilterChips, staleTime: 600000 });
 }
 export function useImageSearch() {
   return useMutation({ mutationFn: (file: File) => searchByImage(file) });

@@ -92,39 +92,9 @@ export async function confirmArtwork(id: number) {
   if (!r.ok) throw new Error('confirm failed');
   return r.json();
 }
-export type Candidate = {
-  id: number; sourcePlatform: string; sourceUrl: string; artistName: string | null;
-  raw: { noteId?: string; title: string; desc: string; tags: string[]; images: { url: string; width: number | null; height: number | null }[] };
-  status: string; promotedArtistId: number | null; dedup?: boolean;
-};
-export async function crawlNote(input: string): Promise<{ total: number; results: any[] }> {
-  const r = await fetch(BASE + '/crawl/note', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: input }) });
-  if (!r.ok) throw new Error('crawl failed');
-  return r.json();
-}
-export async function fetchCandidates(status = 'pending'): Promise<Candidate[]> {
-  const r = await fetch(BASE + '/candidates?status=' + status);
-  if (!r.ok) throw new Error('candidates failed');
-  return r.json();
-}
-export async function promoteCandidate(id: number, body: { artistId?: number; newArtist?: boolean }) {
-  const r = await fetch(BASE + '/candidates/' + id + '/promote', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  if (!r.ok) throw new Error('promote failed');
-  return r.json();
-}
-export async function rejectCandidate(id: number) {
-  const r = await fetch(BASE + '/candidates/' + id + '/reject', { method: 'POST' });
-  if (!r.ok) throw new Error('reject failed');
-  return r.json();
-}
-export async function crawlMihuashi(tag: string, limit = 30) {
-  const r = await fetch(BASE + '/crawl/mihuashi', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tag, limit }) });
-  if (!r.ok) throw new Error('mihuashi crawl failed');
-  return r.json();
-}
-export async function fetchMihuashiTags(): Promise<{ id: number; name: string; type: string }[]> {
-  const r = await fetch(BASE + '/mihuashi/tags');
-  if (!r.ok) throw new Error('mihuashi tags failed');
+export async function fetchMihuashiFilterChips(): Promise<{ category: string; name: string }[]> {
+  const r = await fetch(BASE + '/mihuashi/filter-chips');
+  if (!r.ok) throw new Error('mihuashi filter-chips failed');
   return r.json();
 }
 export type SimilarArtwork = Artwork & { distance: number };

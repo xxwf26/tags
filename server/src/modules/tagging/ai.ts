@@ -8,6 +8,11 @@ const AI_KEY = process.env.AI_API_KEY || process.env.PAPERHUB_API_KEY || '';
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
 const DOUBAO_MODEL = process.env.DOUBAO_MODEL || 'doubao-seed-1-6-vision';
 
+// 是否配置了 AI key（结构性缺配检测，区别于运行时偶发故障）
+export function isAiConfigured(): boolean {
+  return !!AI_KEY;
+}
+
 export type Taxonomy = {
   codes: string[];
   prompt: string;
@@ -157,9 +162,14 @@ const GATE_PROMPT = `你是插画作品筛选员。判断给你的这张图属�
 - category：artwork / ad / text_poster / photo / other 之一。
 不要输出任何解释性文字、不要用 markdown 代码块包裹。`;
 
-export type GateResult = { isArtwork: boolean; quality: number; category: string; reason: string; error: string | null };
+export type GateResult = { isArtwork: boolean; quality: number; category: string; reason: string; error: string | null; skipped: boolean };
 
 export async function gateArtwork(b64: string, mime: string): Promise<GateResult> {
+  // 无 key = 结构性缺配，不是偶发故障：明确标 skipped，让调用方决定（跳过入库 or 打"未质检"标）。
+  // 否则每张图都命中下面的 catch 返回 quality=5，广告/照片/文字海报会全量涌进库。
+  if (!isAiConfigured()) {
+    return { isArtwork: true, quality: 5, category: 'unknown', reason: '', error: 'AI_API_KEY 未配置', skipped: true };
+  }
   try {
     const raw = await callGemini(b64, mime, GATE_PROMPT);
     const parsed = extractJson(raw);
@@ -171,9 +181,10 @@ export async function gateArtwork(b64: string, mime: string): Promise<GateResult
       category: String(parsed.category || 'other'),
       reason: String(parsed.reason || ''),
       error: null,
+      skipped: false,
     };
   } catch (e) {
-    // 中性放行：不因 AI 故障漏掉真作品
-    return { isArtwork: true, quality: 5, category: 'unknown', reason: '', error: (e as Error).message };
+    // 运行时偶发故障（超时/限流）：中性放行，不因抖动漏掉真作品，但标 skipped 供上层区分
+    return { isArtwork: true, quality: 5, category: 'unknown', reason: '', error: (e as Error).message, skipped: true };
   }
 }

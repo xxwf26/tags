@@ -1,18 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
-import { useReferences, useUploadReference, useStartDiscover, useDiscoverTask, useDiscoverResults, useReviewDiscover, usePromoteDiscover, useRejectDiscover, useDeleteReference, useTags } from '../hooks';
-import { tagsByTopDim } from '../api';
+import { useState, useEffect } from 'react';
+import { useMihuashiFilterChips, useStartDiscover, useDiscoverTask, useDiscoverResults, useReviewDiscover, usePromoteDiscover, useRejectDiscover } from '../hooks';
 
-const PLATFORMS = [
-  { key: 'mihuashi', label: '米画师' },
-  { key: 'weibo', label: '微博' },
-  { key: 'xiaohongshu', label: '小红书' },
-];
-const PLATFORM_LABEL: Record<string, string> = { mihuashi: '米画师', weibo: '微博', xiaohongshu: '小红书' };
-const DIM_ROWS = [
-  { code: 'genre', label: '画风' }, { code: 'subject', label: '题材' },
-  { code: 'technique', label: '技法' }, { code: 'usage', label: '用途' },
-  { code: 'tone', label: '色调' }, { code: 'character', label: '人物' },
-];
+const PLATFORM_LABEL: Record<string, string> = { mihuashi: '米画师' };
+// 米画师页面真实筛选 chip 按 category 分组展示
+const CAT_ORDER = ['画风', '类型'];
+const CAT_LABEL: Record<string, string> = { '画风': '画风 / 技法', '类型': '作品类别' };
 const TIER_LABEL: Record<string, { label: string; cls: string }> = {
   tier1: { label: '待复核', cls: 'text-stone-500 bg-stone-100' },
   tier2: { label: '已复核', cls: 'text-sky-600 bg-sky-50' },
@@ -21,56 +13,35 @@ const TIER_LABEL: Record<string, { label: string; cls: string }> = {
 };
 
 export function DiscoverPage() {
-  const refsQ = useReferences();
-  const upload = useUploadReference();
-  const tagsQ = useTags();
+  const chipsQ = useMihuashiFilterChips();
   const startM = useStartDiscover();
   const reviewM = useReviewDiscover();
   const promoteM = usePromoteDiscover();
   const rejectM = useRejectDiscover();
-  const deleteRef = useDeleteReference();
 
-  const [selectedRef, setSelectedRef] = useState<number | null>(null);
-  const [selectedLabels, setSelectedLabels] = useState<Set<string>>(new Set());
-  const [platforms, setPlatforms] = useState<Set<string>>(new Set(['mihuashi']));
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [viewResult, setViewResult] = useState<any>(null);
   const [viewIdx, setViewIdx] = useState(0);
 
   const taskQ = useDiscoverTask(sessionId);
   const resultsQ = useDiscoverResults(taskQ.data?.status === 'ok' ? (sessionId ?? 0) : 0);
-  const ref = (refsQ.data ?? []).find(r => r.id === selectedRef);
-  const byDim = tagsByTopDim(tagsQ.data ?? []);
-  const dimRows = DIM_ROWS.map(d => ({ ...d, tags: byDim.get(d.code)?.tags ?? [] })).filter(d => d.tags.length);
 
-  // 上传参考图 → AI 建议标签预勾选（跨全维度）
-  const loadFile = useCallback((f: File | null) => {
-    if (!f) return;
-    upload.mutate(f, { onSuccess: (r) => {
-      setSelectedRef(r.id);
-      setSelectedLabels(new Set((r.aiTags ?? []).map(t => t.label).filter(Boolean)));
-    } });
-  }, [upload]);
+  // 按.category 分组（chip 已是页面真实可点的，无 config 里的"平涂"等点不了的）
+  const allChips = chipsQ.data ?? [];
+  const byCat = new Map<string, string[]>();
+  for (const c of allChips) {
+    const arr = byCat.get(c.category) ?? [];
+    arr.push(c.name);
+    byCat.set(c.category, arr);
+  }
+  const catRows = CAT_ORDER.filter(c => byCat.has(c));
 
-  useEffect(() => {
-    const onPaste = (e: ClipboardEvent) => {
-      for (const it of e.clipboardData?.items ?? []) {
-        if (it.kind === 'file' && it.type.startsWith('image/')) {
-          const f = it.getAsFile(); if (f) { e.preventDefault(); loadFile(f); break; }
-        }
-      }
-    };
-    window.addEventListener('paste', onPaste);
-    return () => window.removeEventListener('paste', onPaste);
-  }, [loadFile]);
-
-  const toggleLabel = (l: string) => setSelectedLabels(s => { const n = new Set(s); n.has(l) ? n.delete(l) : n.add(l); return n; });
-  const togglePlatform = (k: string) => setPlatforms(s => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  const toggle = (name: string) => setSelected(s => { const n = new Set(s); n.has(name) ? n.delete(name) : n.add(name); return n; });
 
   const doSearch = () => {
-    if (!platforms.size) return;
-    const tags = [...selectedLabels].map(label => ({ label }));
-    startM.mutate({ referenceId: selectedRef, tags, platforms: [...platforms] }, { onSuccess: (r) => setSessionId(r.sessionId) });
+    if (!selected.size) return;
+    startM.mutate({ tags: [...selected].map(label => ({ label })), platforms: ['mihuashi'] }, { onSuccess: (r) => setSessionId(r.sessionId) });
   };
 
   const task = taskQ.data;
@@ -91,61 +62,38 @@ export function DiscoverPage() {
     <div className="max-w-[1600px] mx-auto px-3 md:px-6 py-3">
       {/* 配置区 */}
       <div className="bg-white rounded-2xl p-4 border border-stone-100 mb-3">
-        <h2 className="font-semibold text-stone-800 text-[15px] mb-1">发现 · 按画风搜作品</h2>
-        <p className="text-xs text-stone-400 mb-3">上传参考图（AI 自动识别画风标签）<b>或</b>直接选画风标签 → 用标签去多平台搜帖子 → AI 质检过滤广告/照片 → 复核入库</p>
-        <div className="flex gap-4 flex-wrap">
-          {/* 参考图入口 */}
-          <div className="shrink-0">
-            {ref ? (
-              <div className="relative w-28 h-28">
-                <img src={ref.imageUrl} className="w-28 h-28 object-cover rounded-xl border-2 border-xhs" alt="参考图" />
-                <button onClick={() => setSelectedRef(null)} className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-stone-700 text-white text-sm flex items-center justify-center shadow" title="清除参考图，改用纯标签搜">×</button>
-                <span className="absolute -bottom-2 left-1/2 -translate-x-1/2 text-[9px] bg-xhs text-white rounded-full px-2 py-0.5 whitespace-nowrap">AI 识别画风</span>
-              </div>
-            ) : (
-              <div onClick={() => document.getElementById('discover-file')?.click()}
-                onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); loadFile(e.dataTransfer.files?.[0] ?? null); }}
-                className="w-28 h-28 border-2 border-dashed border-stone-200 rounded-xl flex items-center justify-center text-center cursor-pointer hover:border-xhs hover:bg-xhs-soft/30">
-                <span className="text-[11px] text-stone-400 px-2 whitespace-pre-line">{upload.isPending ? 'AI识别中…' : '📋 可选\n拖入参考图\nAI建议画风'}</span>
-                <input id="discover-file" type="file" accept="image/*" className="hidden" onChange={e => loadFile(e.target.files?.[0] ?? null)} />
-              </div>
-            )}
-          </div>
-
-          <div className="flex-1 min-w-0">
-            {/* 全维度标签，按维度分组 */}
-            <div className="text-[12px] text-stone-500 mb-1">画风标签（点击多选，可跨维度组合{upload.isPending ? '，AI 建议中…' : ref ? '，已按参考图预选' : ''}）</div>
-            <div className="space-y-1 max-h-40 overflow-auto pr-1">
-              {dimRows.map(row => (
-                <div key={row.code} className="flex items-start gap-2">
-                  <span className="text-[11px] text-stone-400 w-8 shrink-0 pt-0.5">{row.label}</span>
+        <h2 className="font-semibold text-stone-800 text-[15px] mb-1">发现 · 按画风搜米画师作品</h2>
+        <p className="text-xs text-stone-400 mb-3">选米画师原生画风标签 → 去米画师召回作品 → AI 质检过滤广告/照片/低质 → 复核入库。标签与米画师一致，保证搜得到。</p>
+        <div className="flex-1 min-w-0">
+          {/* 米画师页面真实筛选 chip，按 category 分组 */}
+          <div className="text-[12px] text-stone-500 mb-1">画风标签（点击多选，可跨组组合{chipsQ.isPending ? '，加载中…' : ''}）</div>
+          <div className="space-y-1 max-h-52 overflow-auto pr-1">
+            {catRows.map(cat => {
+              const names = byCat.get(cat) ?? [];
+              return (
+                <div key={cat} className="flex items-start gap-2">
+                  <span className="text-[11px] text-stone-400 w-16 shrink-0 pt-0.5">{CAT_LABEL[cat] || cat}</span>
                   <div className="flex gap-1 flex-wrap">
-                    {row.tags.map(t => {
-                      const on = selectedLabels.has(t.label);
-                      return <span key={t.id} onClick={() => toggleLabel(t.label)}
-                        className={`text-[12px] px-2.5 py-0.5 rounded-full cursor-pointer border ${on ? 'bg-xhs text-white border-xhs' : 'bg-white text-stone-500 border-stone-200 hover:border-xhs'}`}>{t.label}</span>;
+                    {names.map(name => {
+                      const on = selected.has(name);
+                      return <span key={name} onClick={() => toggle(name)}
+                        className={`text-[12px] px-2.5 py-0.5 rounded-full cursor-pointer border ${on ? 'bg-xhs text-white border-xhs' : 'bg-white text-stone-500 border-stone-200 hover:border-xhs'}`}>{name}</span>;
                     })}
                   </div>
                 </div>
-              ))}
-              {!dimRows.length && <span className="text-[11px] text-stone-400">词表未加载</span>}
-            </div>
+              );
+            })}
+            {!catRows.length && <span className="text-[11px] text-stone-400">{chipsQ.isPending ? '正在拉取米画师筛选标签…' : '标签加载失败，请稍后重试'}</span>}
+          </div>
 
-            {/* 平台 + 搜索 */}
-            <div className="flex items-center gap-3 flex-wrap mt-3">
-              <div className="flex gap-1.5">
-                {PLATFORMS.map(p => {
-                  const on = platforms.has(p.key);
-                  return <span key={p.key} onClick={() => togglePlatform(p.key)}
-                    className={`text-[12px] px-2.5 py-1 rounded-full cursor-pointer border ${on ? 'bg-stone-700 text-white border-stone-700' : 'bg-white text-stone-500 border-stone-200'}`}>{p.label}</span>;
-                })}
-              </div>
-              {platforms.has('xiaohongshu') && <span className="text-[11px] text-amber-600">⚠ 小红书需配置 XHS_COOKIE</span>}
-              <button onClick={doSearch} disabled={running || startM.isPending || (!selectedRef && !selectedLabels.size) || !platforms.size}
-                className="text-[13px] bg-xhs text-white rounded-full px-5 py-2 font-medium disabled:opacity-40">
-                {startM.isPending ? '发起中…' : running ? '搜索中…' : (selectedRef ? '🔍 按识别的画风搜' : '🔍 按标签搜作品')}
-              </button>
-            </div>
+          {/* 搜索 */}
+          <div className="flex items-center gap-3 flex-wrap mt-3">
+            <span className="text-[11px] text-stone-400">采集平台：米画师</span>
+            <button onClick={doSearch} disabled={running || startM.isPending || !selected.size}
+              className="text-[13px] bg-xhs text-white rounded-full px-5 py-2 font-medium disabled:opacity-40">
+              {startM.isPending ? '发起中…' : running ? '搜索中…' : '🔍 按标签搜米画师'}
+            </button>
+            {selected.size > 0 && <span className="text-[11px] text-stone-400">已选 {selected.size} 个标签</span>}
           </div>
         </div>
       </div>
@@ -169,7 +117,7 @@ export function DiscoverPage() {
       {task?.status === 'ok' && (
         <div>
           <div className="text-[13px] text-stone-500 mb-2 px-1">按质量分排序 · {results.length} 张（AI 已过滤广告/照片/低质）</div>
-          {!results.length && <div className="text-center text-stone-400 py-12">没有符合质量的结果，换个画风或平台试试</div>}
+          {!results.length && <div className="text-center text-stone-400 py-12">没有符合质量的结果，换个画风标签试试</div>}
           <div className="masonry columns-2 md:columns-3 lg:columns-4 xl:columns-5 2xl:columns-6">
             {results.map(r => (
               <div key={r.id} className="mb-2.5 break-inside-avoid bg-white rounded-xl overflow-hidden border border-stone-100 card-hover">
@@ -215,25 +163,6 @@ export function DiscoverPage() {
               </div>
               {viewResult.sourceUrl && <a href={viewResult.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-[12px] text-white/50 border border-white/15 rounded-full px-3 py-1 hover:bg-white/10">查看原页 →</a>}
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* 历史参考图快捷复用 */}
-      {(refsQ.data ?? []).length > 0 && (
-        <div className="mt-4">
-          <div className="text-[12px] text-stone-400 mb-1.5">历史参考图</div>
-          <div className="flex gap-2 flex-wrap">
-            {(refsQ.data ?? []).map(r => (
-              <div key={r.id} className="relative">
-                <button onClick={() => { setSelectedRef(r.id); setSelectedLabels(new Set((r.aiTags ?? []).map(t => t.label).filter(Boolean))); }}
-                  className={`block w-14 h-14 rounded-lg overflow-hidden border-2 ${selectedRef === r.id ? 'border-xhs' : 'border-stone-200'}`}>
-                  <img src={r.imageUrl} className="w-full h-full object-cover" alt="" />
-                </button>
-                <button onClick={() => { if (confirm('删除此参考图？')) { deleteRef.mutate(r.id); if (selectedRef === r.id) setSelectedRef(null); } }}
-                  className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-rose-500 text-white text-xs flex items-center justify-center shadow" title="删除">×</button>
-              </div>
-            ))}
           </div>
         </div>
       )}

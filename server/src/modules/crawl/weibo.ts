@@ -66,6 +66,9 @@ export async function searchWeiboByKeyword(keyword: string, limit = 15): Promise
   const page = await ctx.newPage();
   const items: WeiboImage[] = [];
   try {
+    // 必须先落到 m.weibo.cn 域，否则 page.evaluate(fetch) 跨域被拦 → Failed to fetch
+    await page.goto('https://m.weibo.cn/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(1500);
     for (let pg = 1; pg <= 3 && items.length < limit; pg++) {
       const api = `https://m.weibo.cn/api/container/getIndex?containerid=100103type%3D1%26q%3D${encodeURIComponent(keyword)}&page_type=searchall&page=${pg}`;
       const data: any = await page.evaluate(async (u) => {

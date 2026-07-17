@@ -1,88 +1,60 @@
-// 发现（按画风搜作品）：图/标签 → 多平台关键词召回 → 逐张(去重+AI质检) → 按质量排序
-// → 复核 → 正式入库。异步执行：startSearch 立即返回 sessionId，runSearch 后台跑并写进度。
-// 上传图的作用是「AI 识别画风标签」，标签即搜索关键词——不做视觉相似度（避免 onnx 阻塞主线程）。
-import { writeFile, mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+// 发现（按画风搜作品）：选米画师原生画风标签 → 米画师召回 → 逐张(去重+AI质检) → 按质量排序
+// → 复核 → 正式入库。异步执行：start 立即返回 sessionId，runSearch 后台跑并写进度。
+// 平台范围：仅米画师（小红书/微博归寻源）。关键词必须用米画师原生标签，避免词表不一致导致 0 结果。
 import { db, schema } from '../../database/db.js';
 import { eq, and, desc, isNotNull } from 'drizzle-orm';
 import { searchMihuashi } from '../crawl/mihuashi.js';
-import { searchXhsByKeyword, downloadImage } from '../crawl/xhs.js';
-import { searchWeiboByKeyword } from '../crawl/weibo.js';
+import { downloadImage } from '../crawl/xhs.js';
 import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
 import { logOperation } from '../operation/op.js';
 import { gateArtwork } from '../tagging/ai.js';
+import { promoteSearchResult } from '../support/promote-helpers.js';
 
-const PER_KW = 20;          // 每平台每关键词召回上限
+const PER_KW = 20;          // 每关键词召回上限
 const CONCURRENCY = 6;      // 逐张处理并发度
 const MIN_QUALITY = 5;      // AI 质检质量分下限
 
 type Recalled = {
   platform: string; imageUrl: string; sourceUrl: string | null;
-  title: string | null; author: string | null; tags: string[]; allImages: string[];
+  title: string | null; author: string | null; authorUrl: string | null; tags: string[]; allImages: string[];
 };
 
 export class DiscoverService {
-  // 发起搜索：解析关键词（选中标签 / 参考图AI标签）→ 建 session → 立即返回，重活丢后台
-  async start(body: { referenceId?: number | null; tags?: { label: string }[]; platforms?: string[] }) {
-    const platforms = (body.platforms ?? ['mihuashi']).filter(p => ['xiaohongshu', 'mihuashi', 'weibo'].includes(p));
-    if (!platforms.length) throw new Error('未选择采集平台');
+  // 发起搜索：关键词=传入的米画师原生标签 → 建 session → 立即返回，重活丢后台
+  async start(body: { tags?: { label: string }[]; platforms?: string[] }) {
+    const platforms = ['mihuashi']; // 发现只走米画师
 
-    // 关键词：优先用传入标签；若只传了参考图则用其 AI 标签
-    let keywords = (body.tags ?? []).map(t => String(t.label).trim()).filter(Boolean);
-    const referenceId = body.referenceId ?? null;
-    const mode: 'image' | 'tags' = referenceId ? 'image' : 'tags';
-
-    if (referenceId) {
-      const [ref] = await db.select().from(schema.referenceImages).where(eq(schema.referenceImages.id, referenceId));
-      if (!ref) throw new Error('参考图不存在');
-      if (!keywords.length) {
-        const aiTags = (ref.aiTags as any[]) || [];
-        keywords = aiTags.map(t => t.label).filter(Boolean);
-      }
-    }
-    if (!keywords.length) throw new Error('无搜索关键词：请选画风标签，或上传能识别出画风的参考图');
+    // 关键词：用户选中的米画师原生标签（必须传）
+    const keywords = (body.tags ?? []).map(t => String(t.label).trim()).filter(Boolean);
+    if (!keywords.length) throw new Error('请选择米画师画风标签作为搜索关键词');
 
     const [sr] = await db.insert(schema.searchSessions).values({
-      referenceImageId: referenceId, mode,
+      referenceImageId: null, mode: 'tags',
       searchTags: { tags: keywords }, platforms,
       status: 'running', doneCount: 0, totalCount: 0,
     });
     const sessionId = (sr as any).insertId;
 
-    this.runSearch(sessionId, { platforms, keywords, mode, referenceId })
+    this.runSearch(sessionId, { keywords })
       .catch(async (e) => {
         console.error(`[discover] session ${sessionId} 失败:`, e.message);
         await db.update(schema.searchSessions).set({ status: 'failed' }).where(eq(schema.searchSessions.id, sessionId)).catch(() => {});
       });
 
-    return { sessionId, mode };
+    return { sessionId, mode: 'tags' as const };
   }
 
   // 后台：召回 → 逐张处理 → 写结果 + 进度
-  private async runSearch(sessionId: number, ctx: {
-    platforms: string[]; keywords: string[]; mode: 'image' | 'tags'; referenceId: number | null;
-  }) {
-    const { platforms, keywords, mode, referenceId } = ctx;
-    const xhsCookie = process.env.XHS_COOKIE || '';
+  private async runSearch(sessionId: number, ctx: { keywords: string[] }) {
+    const { keywords } = ctx;
 
-    // 1) 召回候选池（各平台 × 关键词）
+    // 1) 召回候选池（米画师 × 关键词）
     const pool: Recalled[] = [];
-    for (const platform of platforms) {
-      for (const kw of keywords) {
-        try {
-          if (platform === 'mihuashi') {
-            const arts = await searchMihuashi(kw, PER_KW);
-            for (const a of arts) pool.push({ platform, imageUrl: a.imageUrl, sourceUrl: `https://www.mihuashi.com/artworks/${a.mhsId}`, title: `米画师·${kw}`, author: null, tags: [kw], allImages: [a.imageUrl] });
-          } else if (platform === 'weibo') {
-            const imgs = await searchWeiboByKeyword(kw, PER_KW);
-            for (const im of imgs) pool.push({ platform, imageUrl: im.url, sourceUrl: im.url, title: im.title || `微博·${kw}`, author: null, tags: [kw], allImages: [im.url] });
-          } else if (platform === 'xiaohongshu') {
-            if (!xhsCookie) { console.error('[discover] 小红书未配置 XHS_COOKIE，跳过'); continue; }
-            const notes = await searchXhsByKeyword(kw, PER_KW, xhsCookie);
-            for (const n of notes) if (n.images.length) pool.push({ platform, imageUrl: n.images[0], sourceUrl: n.sourceUrl, title: n.title || kw, author: n.author || null, tags: n.xhsTags || [], allImages: n.images });
-          }
-        } catch (e: any) { console.error(`[discover] ${platform} "${kw}" 召回失败: ${e.message}`); }
-      }
+    for (const kw of keywords) {
+      try {
+        const arts = await searchMihuashi(kw, PER_KW);
+        for (const a of arts) pool.push({ platform: 'mihuashi', imageUrl: a.imageUrl, sourceUrl: `https://www.mihuashi.com/artworks/${a.mhsId}`, title: `米画师·${kw}`, author: a.author, authorUrl: a.authorUrl, tags: [kw], allImages: [a.imageUrl] });
+      } catch (e: any) { console.error(`[discover] 米画师 "${kw}" 召回失败: ${e.message}`); }
     }
 
     // 按 sourceUrl 去重候选池
@@ -106,10 +78,21 @@ export class DiscoverService {
         if (hash) seenHash.push(hash);
         // AI 质检闸门（单模型，省成本）：过滤广告/照片/文字海报/低质
         const gate = await gateArtwork(buf.toString('base64'), type);
+        // AI 没真正质检（无 key / 调用失败）：不伪装成通过，入库但 quality=null 标"未质检"，交人工复核
+        if (gate.skipped) {
+          await db.insert(schema.searchResults).values({
+            sessionId, referenceImageId: null, platform: r.platform,
+            sourceUrl: r.sourceUrl, imageUrl: r.imageUrl, title: r.title, author: r.author, authorUrl: r.authorUrl,
+            tags: r.tags, allImages: r.allImages, imageHash: hash,
+            similarity: null, quality: null, isNew: 1, tier: 'tier1',
+          });
+          kept++;
+          return;
+        }
         if (!gate.isArtwork || gate.quality < MIN_QUALITY) return;
         await db.insert(schema.searchResults).values({
-          sessionId, referenceImageId: referenceId, platform: r.platform,
-          sourceUrl: r.sourceUrl, imageUrl: r.imageUrl, title: r.title, author: r.author,
+          sessionId, referenceImageId: null, platform: r.platform,
+          sourceUrl: r.sourceUrl, imageUrl: r.imageUrl, title: r.title, author: r.author, authorUrl: r.authorUrl,
           tags: r.tags, allImages: r.allImages, imageHash: hash,
           similarity: null, quality: gate.quality, isNew: 1, tier: 'tier1',
         });
@@ -127,7 +110,7 @@ export class DiscoverService {
     }
 
     await db.update(schema.searchSessions).set({ status: 'ok', doneCount: uniq.length, resultCount: kept }).where(eq(schema.searchSessions.id, sessionId));
-    await logOperation({ type: 'discover_start', targetType: 'reference', targetId: referenceId ?? 0, summary: `发现 #${sessionId}(${mode})：召回 ${uniq.length}，入库 ${kept} 结果` });
+    await logOperation({ type: 'discover_start', targetType: 'reference', targetId: 0, summary: `发现 #${sessionId}(tags)：召回 ${uniq.length}，入库 ${kept} 结果` });
   }
 
   // 任务进度
@@ -156,44 +139,10 @@ export class DiscoverService {
     return { id, tier: 'rejected' };
   }
 
-  // 正式入库：下载图 → 建作品 → 建/找画师 → 同步画师库+画廊
+  // 正式入库：tier2 → promoted（共用 promoteSearchResult）
   async promote(id: number) {
     const [result] = await db.select().from(schema.searchResults).where(eq(schema.searchResults.id, id));
     if (!result) throw new Error('结果不存在');
-    if (!result.imageUrl) throw new Error('结果无图片URL');
-
-    const uploadsDir = join(process.cwd(), 'uploads');
-    await mkdir(uploadsDir, { recursive: true });
-    const { buf, type } = await downloadImage(result.imageUrl);
-    let imageHash: string | null = null;
-    try { imageHash = await aHash(buf); } catch {}
-    const ext = type.includes('png') ? 'png' : type.includes('webp') ? 'webp' : 'jpg';
-    const filename = `discover-${id}-${Date.now()}.${ext}`;
-    await writeFile(join(uploadsDir, filename), buf);
-
-    // 找/建画师（按署名精确匹配）
-    let artistId: number | null = null;
-    if (result.author) {
-      const all = await db.select().from(schema.artists);
-      const ex = all.find(a => (a.name || '').trim() === result.author!.trim());
-      if (ex) artistId = ex.id;
-      else {
-        const links = result.platform ? { [result.platform]: [result.sourceUrl] } : undefined;
-        const [ar] = await db.insert(schema.artists).values({ name: result.author.trim(), links });
-        artistId = (ar as any).insertId;
-      }
-    }
-
-    const [aw] = await db.insert(schema.artworks).values({
-      artistId, title: result.title || null,
-      imageUrl: `/uploads/${filename}`, thumbUrl: `/uploads/${filename}`,
-      imageHash, sourcePlatform: result.platform || 'discover', sourceUrl: result.sourceUrl || null,
-      tagStatus: 'pending',
-    });
-    const artworkId = (aw as any).insertId;
-
-    await db.update(schema.searchResults).set({ tier: 'promoted', promotedArtworkId: artworkId }).where(eq(schema.searchResults.id, id));
-    await logOperation({ type: 'discover_promote', targetType: 'search_result', targetId: id, summary: `发现结果 #${id} 正式入库 → 作品 #${artworkId}` });
-    return { id, tier: 'promoted', artworkId, artistId };
+    return promoteSearchResult(result, { filePrefix: 'discover', logType: 'discover_promote' });
   }
 }

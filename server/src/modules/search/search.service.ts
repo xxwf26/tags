@@ -1,19 +1,19 @@
-// 寻源搜索：参考图标签 → 多平台搜索 → 结果存三级库 → 复核 → 正式入库
-import { writeFile, mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+// 寻源搜索：参考图标签 → 小红书/微博搜索 → 结果存三级库 → 复核 → 正式入库
+// 平台范围：小红书（SSR + 文字预筛 + AI 双模型质检 + 增量写）、微博（关键词搜 + AI 单模型质检）
 import { db, schema } from '../../database/db.js';
 import { eq, and, desc, inArray, isNotNull } from 'drizzle-orm';
-import { searchMihuashi } from '../crawl/mihuashi.js';
 import { searchXhsByKeyword, downloadImage } from '../crawl/xhs.js';
 import { searchWeiboByKeyword } from '../crawl/weibo.js';
-import { searchBaiduImages } from '../crawl/baidu.js';
 import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
 import { logOperation } from '../operation/op.js';
-import { loadTaxonomy, extractJson, normalizeOutput, callBoth } from '../tagging/ai.js';
+import { loadTaxonomy, extractJson, normalizeOutput, callBoth, gateArtwork } from '../tagging/ai.js';
 import { SettingsService } from '../settings/settings.service.js';
+import { promoteSearchResult } from '../support/promote-helpers.js';
 
 // 正在运行的搜索进程（用于终止）
 const runningSearches = new Map<number, boolean>(); // sessionId → aborted?
+
+const MIN_QUALITY = 5; // AI 质检质量分下限
 
 export class SearchService {
   // 终止搜索
@@ -38,7 +38,7 @@ export class SearchService {
       referenceImageId: body.referenceId,
       parentSessionId: prevSession,
       searchTags: { tags: body.tags, fuzzyRatio: body.fuzzyRatio ?? 0.5 },
-      platforms: body.platforms ?? ['xiaohongshu'],
+      platforms: body.platforms ?? ['xiaohongshu', 'weibo'],
       status: 'running',
     });
     const sessionId = (sr as any).insertId;
@@ -59,7 +59,7 @@ export class SearchService {
     const isAborted = () => runningSearches.get(sessionId) === true;
     let progressTotal = 0, progressProcessed = 0;
     const progressStart = Date.now();
-    const platforms = body.platforms ?? ['xiaohongshu'];
+    const platforms = body.platforms ?? ['xiaohongshu', 'weibo'];
     const settingsSvc = new SettingsService();
     const xhsCookie = await settingsSvc.getXhsCookie();
     const fuzzyRatio = body.fuzzyRatio ?? 0.5;
@@ -74,62 +74,32 @@ export class SearchService {
       return d?.code ?? '';
     };
 
-    // 必中的 genre 画风标签 → 米画师搜索关键词
+    // 必中的 genre 画风标签 → 搜索关键词；没有必中 genre 则用所有 genre 标签
     const mustGenreTags = body.tags.filter((t: any) => t.mode === 'must' && rootCodeOf(t.dimensionId) === 'genre');
-    // 如果没有必中 genre，退而用所有 genre 标签（含模糊）
     const allGenreTags = body.tags.filter((t: any) => rootCodeOf(t.dimensionId) === 'genre');
     const searchKeywords = (mustGenreTags.length ? mustGenreTags : allGenreTags).map((t: any) => t.label);
 
-    // 取上一次的结果（用于 isNew 判断）—— prevSession 从参数传入
+    // 取上一次的结果（用于 isNew 判断）
     const prevResults = prevSession ? await db.select().from(schema.searchResults)
       .where(eq(schema.searchResults.sessionId, prevSession)) : [];
     const prevHashes = new Set(prevResults.map(r => r.imageHash).filter(Boolean));
     const prevUrls = new Set(prevResults.map(r => r.sourceUrl).filter(Boolean));
 
+    // 共享去重集合：库内已有 hash + 本 session 已收集 hash
+    const libHashes = (await db.select({ hash: schema.artworks.imageHash })
+      .from(schema.artworks).where(isNotNull(schema.artworks.imageHash))).map(a => a.hash).filter(Boolean) as string[];
+    const libHashSet = new Set(libHashes);
+    const sessionHashes = new Set<string>();
+
     let totalResults = 0, newResults = 0;
 
     for (const platform of platforms) {
-      let items: { imageUrl: string; title?: string | null; author?: string | null; sourceUrl?: string; tags?: string[] }[] = [];
       try {
-        if (platform === 'baidu') {
-          // 百度图片：免登录 JSON API，最可靠
-          const keywords = searchKeywords.length ? searchKeywords : ['插画'];
-          for (const kw of keywords) {
-            const imgs = await searchBaiduImages(kw, 20);
-            console.log(`[search] 百度 "${kw}": ${imgs.length} 张`);
-            items.push(...imgs.map(im => ({
-              imageUrl: im.imageUrl, title: im.title || `百度·${kw}`, author: null, sourceUrl: im.sourceUrl || im.imageUrl, tags: [kw],
-            })));
-          }
-        } else if (platform === 'mihuashi') {
-          const keywords = searchKeywords.length ? searchKeywords : ['日系'];
-          for (const kw of keywords) {
-            const arts = await searchMihuashi(kw, 15);
-            console.log(`[search] 米画师 "${kw}": ${arts.length} 张`);
-            items.push(...arts.map(a => ({
-              imageUrl: a.imageUrl, title: `米画师·${kw}`, author: null, sourceUrl: a.imageUrl, tags: [kw],
-            })));
-          }
-        } else if (platform === 'xiaohongshu') {
+        if (platform === 'xiaohongshu') {
           if (!xhsCookie) { console.error('[search] 小红书: 未配置 XHS_COOKIE，跳过'); }
           else {
             const keywords = searchKeywords.length ? searchKeywords : ['插画'];
             const tax = await loadTaxonomy();
-            // 预加载维度表（rootCode 判定用）
-            const dims = await db.select().from(schema.tagDimensions);
-            const dimById = new Map(dims.map(d => [d.id, d]));
-            const rootCodeOf = (dimId: number): string => {
-              let d = dimById.get(dimId), cur = dimId;
-              while (d && d.parentId) { cur = d.parentId; d = dimById.get(cur); }
-              return d?.code ?? '';
-            };
-            // 预加载库内已有 hash（去重用）
-            const libHashes = (await db.select({ hash: schema.artworks.imageHash })
-              .from(schema.artworks).where(isNotNull(schema.artworks.imageHash))).map(a => a.hash).filter(Boolean) as string[];
-            const libHashSet = new Set(libHashes);
-            // 本 session 内已收集的 hash（同 session 去重）
-            const sessionHashes = new Set<string>();
-
             for (const kw of keywords) {
               if (isAborted()) { console.log(`[search] session ${sessionId} 已终止`); break; }
               const notes = await searchXhsByKeyword(kw, 300, xhsCookie);
@@ -173,7 +143,7 @@ export class SearchService {
                   console.error(`[search] AI判断失败 "${n.title?.slice(0, 20)}": ${e.message}`);
                 }
                 if (!isArtwork) { skipNotArt++; continue; }
-                if (quality < 5) { skipLowQ++; continue; }
+                if (quality < MIN_QUALITY) { skipLowQ++; continue; }
                 kept++;
                 // 增量写入：每筛选完一张立即写 DB
                 const dedupKey = n.sourceUrl || n.images[0] || '';
@@ -195,7 +165,7 @@ export class SearchService {
                 });
                 totalResults++;
                 if (isNew) newResults++;
-                // 每10张更新一次 session 计数（前端轮询能看到进度）
+                // 每3张更新一次 session 计数（前端轮询能看到进度）
                 if (progressProcessed % 3 === 0) {
                   await db.update(schema.searchSessions).set({ resultCount: totalResults, newCount: newResults, searchTags: { tags: body.tags, fuzzyRatio, progress: { total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString() } } }).where(eq(schema.searchSessions.id, sessionId));
                   console.log(`[search] 进度: ${progressProcessed}/${progressTotal} 已处理，保留 ${kept} 张（非绘画 ${skipNotArt}，低质 ${skipLowQ}，重复 ${skipDup}）`);
@@ -207,41 +177,69 @@ export class SearchService {
         } else if (platform === 'weibo') {
           const keywords = searchKeywords.length ? searchKeywords : ['插画'];
           for (const kw of keywords) {
+            if (isAborted()) { console.log(`[search] session ${sessionId} 已终止`); break; }
             const imgs = await searchWeiboByKeyword(kw, 15);
-            console.log(`[search] 微博 "${kw}": ${imgs.length} 张`);
-            items.push(...imgs.map(im => ({
-              imageUrl: im.url, title: im.title || `微博·${kw}`, author: null, sourceUrl: im.url, tags: [kw],
-            })));
+            console.log(`[search] 微博 "${kw}": ${imgs.length} 张，开始 AI 筛选（增量写入）...`);
+            progressTotal += imgs.length;
+            await db.update(schema.searchSessions).set({ searchTags: { tags: body.tags, fuzzyRatio, progress: { total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString() } } }).where(eq(schema.searchSessions.id, sessionId));
+            let kept = 0, skipNotArt = 0, skipDup = 0, skipLowQ = 0;
+            for (const im of imgs) {
+              if (isAborted()) { console.log(`[search] session ${sessionId} 已终止（已处理 ${progressProcessed} 张）`); break; }
+              progressProcessed++;
+              let isArtwork = false;
+              let quality = 0;
+              let skipped = false;
+              let imageHash: string | null = null;
+              try {
+                const { buf, type } = await downloadImage(im.url);
+                try { imageHash = await aHash(buf); } catch {}
+                if (imageHash) {
+                  if ([...libHashSet].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipDup++; continue; }
+                  if ([...sessionHashes].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipDup++; continue; }
+                  sessionHashes.add(imageHash);
+                }
+                const gate = await gateArtwork(buf.toString('base64'), type);
+                isArtwork = gate.isArtwork;
+                quality = gate.quality;
+                skipped = gate.skipped;
+              } catch (e: any) {
+                console.error(`[search] 微博图处理失败 "${im.title?.slice(0, 20)}": ${e.message}`);
+              }
+              // AI 未真正质检（无 key/调用失败）：入库但 quality=null 标"未质检"，交人工复核
+              if (!skipped) {
+                if (!isArtwork) { skipNotArt++; continue; }
+                if (quality < MIN_QUALITY) { skipLowQ++; continue; }
+              }
+              kept++;
+              const dedupKey = im.url;
+              const isNew = !prevUrls.has(dedupKey) && !prevHashes.has(im.url);
+              await db.insert(schema.searchResults).values({
+                sessionId,
+                referenceImageId: body.referenceId,
+                platform: 'weibo',
+                sourceUrl: im.url,
+                imageUrl: im.url,
+                allImages: [im.url],
+                imageHash: imageHash || null,
+                quality: skipped ? null : quality,
+                title: im.title || `微博·${kw}`,
+                author: null,
+                tags: [kw],
+                isNew: isNew ? 1 : 0,
+                tier: 'tier1',
+              });
+              totalResults++;
+              if (isNew) newResults++;
+              if (progressProcessed % 3 === 0) {
+                await db.update(schema.searchSessions).set({ resultCount: totalResults, newCount: newResults, searchTags: { tags: body.tags, fuzzyRatio, progress: { total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString() } } }).where(eq(schema.searchSessions.id, sessionId));
+                console.log(`[search] 进度: ${progressProcessed}/${progressTotal} 已处理，保留 ${kept} 张（非绘画 ${skipNotArt}，低质 ${skipLowQ}，重复 ${skipDup}）`);
+              }
+            }
+            console.log(`[search] 微博 "${kw}" 筛选完成: 保留 ${kept}，非绘画 ${skipNotArt}，低质 ${skipLowQ}，重复 ${skipDup}`);
           }
         }
       } catch (e: any) {
         console.error(`[search] ${platform} 失败: ${e.message}`);
-      }
-
-      // 去重 + 存结果（按 sourceUrl 去重，imageUrl 空也存）
-      const seen = new Set<string>();
-      for (const item of items) {
-        const dedupKey = item.sourceUrl || item.imageUrl || '';
-        if (!dedupKey || seen.has(dedupKey)) continue;
-        seen.add(dedupKey);
-        const isNew = !prevUrls.has(dedupKey) && !prevHashes.has(item.imageUrl || '');
-        const [rr] = await db.insert(schema.searchResults).values({
-          sessionId,
-          referenceImageId: body.referenceId,
-          platform,
-          sourceUrl: item.sourceUrl || null,
-          imageUrl: item.imageUrl || null,
-          allImages: (item as any).allImages || null,
-          aiTags: (item as any).aiTags || null,
-          imageHash: (item as any).imageHash || null,
-          title: item.title || null,
-          author: item.author || null,
-          tags: item.tags || [],
-          isNew: isNew ? 1 : 0,
-          tier: 'tier1',
-        });
-        totalResults++;
-        if (isNew) newResults++;
       }
     }
 
@@ -296,50 +294,10 @@ export class SearchService {
     return { id, tier: 'rejected' };
   }
 
-  // 正式入库：tier2 → promoted（下载图 → 建作品 → 建画师 → 同步画师库+画廊）
+  // 正式入库：tier2 → promoted（共用 promoteSearchResult）
   async promote(id: number) {
     const [result] = await db.select().from(schema.searchResults).where(eq(schema.searchResults.id, id));
     if (!result) throw new Error('结果不存在');
-
-    // 下载图片
-    if (!result.imageUrl) throw new Error('结果无图片URL');
-    const uploadsDir = join(process.cwd(), 'uploads');
-    await mkdir(uploadsDir, { recursive: true });
-    const { buf, type } = await downloadImage(result.imageUrl);
-    let imageHash: string | null = null;
-    try { imageHash = await aHash(buf); } catch {}
-    const ext = type.includes('png') ? 'png' : type.includes('webp') ? 'webp' : 'jpg';
-    const filename = `search-${id}-${Date.now()}.${ext}`;
-    await writeFile(join(uploadsDir, filename), buf);
-
-    // 找/建画师
-    let artistId: number | null = null;
-    if (result.author) {
-      const all = await db.select().from(schema.artists);
-      const ex = all.find(a => (a.name || '').trim() === result.author!.trim());
-      if (ex) artistId = ex.id;
-      else {
-        const [ar] = await db.insert(schema.artists).values({ name: result.author.trim() });
-        artistId = (ar as any).insertId;
-      }
-    }
-
-    // 建作品
-    const [aw] = await db.insert(schema.artworks).values({
-      artistId,
-      title: result.title || null,
-      imageUrl: `/uploads/${filename}`,
-      thumbUrl: `/uploads/${filename}`,
-      imageHash,
-      sourcePlatform: result.platform,
-      sourceUrl: result.sourceUrl || null,
-      tagStatus: 'pending',
-    });
-    const artworkId = (aw as any).insertId;
-
-    // 标记结果为 promoted
-    await db.update(schema.searchResults).set({ tier: 'promoted', promotedArtworkId: artworkId }).where(eq(schema.searchResults.id, id));
-    await logOperation({ type: 'search_promote', targetType: 'search_result', targetId: id, summary: `寻源结果 #${id} 正式入库 → 作品 #${artworkId}` });
-    return { id, tier: 'promoted', artworkId, artistId };
+    return promoteSearchResult(result, { filePrefix: 'search', logType: 'search_promote' });
   }
 }
