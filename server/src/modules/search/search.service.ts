@@ -198,7 +198,7 @@ export class SearchService {
                 if (isNew) newResults++;
                 // 每10张更新一次 session 计数（前端轮询能看到进度）
                 if (kept % 3 === 0) {
-                  await db.update(schema.searchSessions).set({ resultCount: totalResults, newCount: newResults }).where(eq(schema.searchSessions.id, sessionId));
+                  await db.update(schema.searchSessions).set({ resultCount: totalResults, newCount: newResults, searchTags: { tags: body.tags, fuzzyRatio, progress: { total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString() } } }).where(eq(schema.searchSessions.id, sessionId));
                   console.log(`[search] 进度: ${progressProcessed}/${progressTotal} 已处理，保留 ${kept} 张（非绘画 ${skipNotArt}，低质 ${skipLowQ}，重复 ${skipDup}）`);
                 }
               }
