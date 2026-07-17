@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchTags, fetchTagsAll, fetchArtworks, fetchArtists, fetchArtist, createArtwork, deleteArtwork, setArtworkTags, updateEngage, tagArtwork, tagBatch, confirmArtwork, crawlNote, fetchCandidates, promoteCandidate, rejectCandidate, searchByImage, createTag, updateTag, deleteTag, createDimension, crawlMihuashi, fetchMihuashiTags, fetchOperations, undoOperation, redoOperation, type Artwork, type Artist, uploadReference, fetchReferences, updateReferenceTags, startSearch, fetchSearchSessions, fetchSearchResults, reviewSearchResult, promoteSearchResult, rejectSearchResult, deleteReference } from './api'
+import { fetchTags, fetchTagsAll, fetchArtworks, fetchArtists, fetchArtist, createArtwork, deleteArtwork, setArtworkTags, updateEngage, tagArtwork, tagBatch, confirmArtwork, crawlNote, fetchCandidates, promoteCandidate, rejectCandidate, searchByImage, createTag, updateTag, deleteTag, createDimension, crawlMihuashi, fetchMihuashiTags, fetchOperations, undoOperation, redoOperation, type Artwork, type Artist, uploadReference, fetchReferences, updateReferenceTags, startSearch, fetchSearchSessions, fetchSearchResults, reviewSearchResult, promoteSearchResult, rejectSearchResult, deleteReference, startDiscover, fetchDiscoverTask, fetchDiscoverResults, reviewDiscover, promoteDiscover, rejectDiscover } from './api'
 
 export function useTags() {
   return useQuery({ queryKey: ['tags'], queryFn: fetchTags });
@@ -164,4 +164,35 @@ export function useDeleteReference() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (id: number) => deleteReference(id),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['references'] }); qc.invalidateQueries({ queryKey: ['search-sessions'] }); } });
+}
+
+// ============ 发现（按画风搜作品，独立于寻源） ============
+export function useStartDiscover() {
+  return useMutation({ mutationFn: startDiscover });
+}
+export function useDiscoverTask(sessionId: number | null) {
+  return useQuery({
+    queryKey: ['discover-task', sessionId],
+    queryFn: () => fetchDiscoverTask(sessionId!),
+    enabled: !!sessionId,
+    refetchInterval: (q) => (q.state.data && q.state.data.status === 'running' ? 1500 : false),
+  });
+}
+export function useDiscoverResults(sessionId: number, tier?: string) {
+  return useQuery({ queryKey: ['discover-results', sessionId, tier], queryFn: () => fetchDiscoverResults(sessionId, tier), enabled: !!sessionId });
+}
+export function useReviewDiscover() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (id: number) => reviewDiscover(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['discover-results'] }) });
+}
+export function usePromoteDiscover() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (id: number) => promoteDiscover(id),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['discover-results'] }); qc.invalidateQueries({ queryKey: ['artworks'] }); qc.invalidateQueries({ queryKey: ['artists'] }); } });
+}
+export function useRejectDiscover() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (id: number) => rejectDiscover(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['discover-results'] }) });
 }

@@ -50,8 +50,20 @@ verify/report.md
 # 米画师登录态（含凭据，勿提交）
 server/mhs-auth.json
 server/mhs-cookie.txt
+server/.mhs-chrome-profile/
 
 # 数据交付包（单独发伙伴，不进git）
 server/style_atlas_data.sql
 server/style_atlas_data_package.zip
 server/style_atlas_data_package/
+
+# 作品质检/爬取/同步的数据产物（不进git，报告与增量包单独发）
+server/audit-report.json
+server/audit-deleted-backup.json
+server/crawl-report.json
+server/crawl-report-weibo.json
+server/crawl-report-mihuashi.json
+server/sync-pack.tar.gz
+server/sync-pack/
+server/tmp-*.json
+server/*.log

@@ -8,8 +8,9 @@ import { OperationModule } from './modules/operation/operation.module.js';
 import { ReferenceModule } from './modules/reference/reference.module.js';
 import { SearchModule } from './modules/search/search.module.js';
 import { SettingsModule } from './modules/settings/settings.module.js';
+import { DiscoverModule } from './modules/discover/discover.module.js';
 
 @Module({
-  imports: [TagModule, ArtworkModule, ArtistModule, TaggingModule, CandidateModule, OperationModule, ReferenceModule, SearchModule, SettingsModule],
+  imports: [TagModule, ArtworkModule, ArtistModule, TaggingModule, CandidateModule, OperationModule, ReferenceModule, SearchModule, SettingsModule, DiscoverModule],
 })
 export class AppModule {}

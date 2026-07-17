@@ -1,129 +1,242 @@
-import { useState } from 'react';
-import { useCandidates, useCrawlNote, usePromoteCandidate, useRejectCandidate, useArtists, useMihuashiTags, useCrawlMihuashi } from '../hooks';
+import { useState, useEffect, useCallback } from 'react';
+import { useReferences, useUploadReference, useStartDiscover, useDiscoverTask, useDiscoverResults, useReviewDiscover, usePromoteDiscover, useRejectDiscover, useDeleteReference, useTags } from '../hooks';
+import { tagsByTopDim } from '../api';
+
+const PLATFORMS = [
+  { key: 'mihuashi', label: '米画师' },
+  { key: 'weibo', label: '微博' },
+  { key: 'xiaohongshu', label: '小红书' },
+];
+const PLATFORM_LABEL: Record<string, string> = { mihuashi: '米画师', weibo: '微博', xiaohongshu: '小红书' };
+const DIM_ROWS = [
+  { code: 'genre', label: '画风' }, { code: 'subject', label: '题材' },
+  { code: 'technique', label: '技法' }, { code: 'usage', label: '用途' },
+  { code: 'tone', label: '色调' }, { code: 'character', label: '人物' },
+];
+const TIER_LABEL: Record<string, { label: string; cls: string }> = {
+  tier1: { label: '待复核', cls: 'text-stone-500 bg-stone-100' },
+  tier2: { label: '已复核', cls: 'text-sky-600 bg-sky-50' },
+  promoted: { label: '已入库', cls: 'text-emerald-600 bg-emerald-50' },
+  rejected: { label: '已丢弃', cls: 'text-stone-400 bg-stone-100 line-through' },
+};
 
 export function DiscoverPage() {
-  const [input, setInput] = useState('');
-  const crawl = useCrawlNote();
-  const promote = usePromoteCandidate();
-  const reject = useRejectCandidate();
-  const artistsQ = useArtists();
-  const candsQ = useCandidates('pending');
-  const mhsTagsQ = useMihuashiTags();
-  const mhsCrawl = useCrawlMihuashi();
-  const [mhsTag, setMhsTag] = useState('日系');
-  const [mhsLimit, setMhsLimit] = useState(20);
-  // 每个候选的转正选项：artistId 选择
-  const [choice, setChoice] = useState<Record<number, { artistId: string; newArtist: boolean }>>({});
+  const refsQ = useReferences();
+  const upload = useUploadReference();
+  const tagsQ = useTags();
+  const startM = useStartDiscover();
+  const reviewM = useReviewDiscover();
+  const promoteM = usePromoteDiscover();
+  const rejectM = useRejectDiscover();
+  const deleteRef = useDeleteReference();
 
-  const submit = () => { if (input.trim()) { crawl.mutate(input.trim(), { onSuccess: () => setInput('') }); } };
-  const getChoice = (id: number) => choice[id] ?? { artistId: '', newArtist: true };
+  const [selectedRef, setSelectedRef] = useState<number | null>(null);
+  const [selectedLabels, setSelectedLabels] = useState<Set<string>>(new Set());
+  const [platforms, setPlatforms] = useState<Set<string>>(new Set(['mihuashi']));
+  const [sessionId, setSessionId] = useState<number | null>(null);
+  const [viewResult, setViewResult] = useState<any>(null);
+  const [viewIdx, setViewIdx] = useState(0);
+
+  const taskQ = useDiscoverTask(sessionId);
+  const resultsQ = useDiscoverResults(taskQ.data?.status === 'ok' ? (sessionId ?? 0) : 0);
+  const ref = (refsQ.data ?? []).find(r => r.id === selectedRef);
+  const byDim = tagsByTopDim(tagsQ.data ?? []);
+  const dimRows = DIM_ROWS.map(d => ({ ...d, tags: byDim.get(d.code)?.tags ?? [] })).filter(d => d.tags.length);
+
+  // 上传参考图 → AI 建议标签预勾选（跨全维度）
+  const loadFile = useCallback((f: File | null) => {
+    if (!f) return;
+    upload.mutate(f, { onSuccess: (r) => {
+      setSelectedRef(r.id);
+      setSelectedLabels(new Set((r.aiTags ?? []).map(t => t.label).filter(Boolean)));
+    } });
+  }, [upload]);
+
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      for (const it of e.clipboardData?.items ?? []) {
+        if (it.kind === 'file' && it.type.startsWith('image/')) {
+          const f = it.getAsFile(); if (f) { e.preventDefault(); loadFile(f); break; }
+        }
+      }
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  }, [loadFile]);
+
+  const toggleLabel = (l: string) => setSelectedLabels(s => { const n = new Set(s); n.has(l) ? n.delete(l) : n.add(l); return n; });
+  const togglePlatform = (k: string) => setPlatforms(s => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
+
+  const doSearch = () => {
+    if (!platforms.size) return;
+    const tags = [...selectedLabels].map(label => ({ label }));
+    startM.mutate({ referenceId: selectedRef, tags, platforms: [...platforms] }, { onSuccess: (r) => setSessionId(r.sessionId) });
+  };
+
+  const task = taskQ.data;
+  const running = task?.status === 'running';
+  const results = resultsQ.data ?? [];
+  const viewImgs: string[] = viewResult?.allImages?.length ? viewResult.allImages : (viewResult?.imageUrl ? [viewResult.imageUrl] : []);
+  useEffect(() => {
+    if (!viewResult) return;
+    const h = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setViewResult(null);
+      else if (e.key === 'ArrowLeft') setViewIdx(i => (i - 1 + viewImgs.length) % viewImgs.length);
+      else if (e.key === 'ArrowRight') setViewIdx(i => (i + 1) % viewImgs.length);
+    };
+    window.addEventListener('keydown', h); return () => window.removeEventListener('keydown', h);
+  }, [viewResult, viewImgs.length]);
 
   return (
     <div className="max-w-[1600px] mx-auto px-3 md:px-6 py-3">
-      <div className="bg-white rounded-2xl p-5 border border-stone-100">
-        <h2 className="font-semibold text-stone-800 text-[15px] mb-1">外部采集 · 发现</h2>
-        <p className="text-xs text-stone-400 mb-3">贴小红书笔记链接（<b>可多条，一行一个或空格分隔</b>）→ SSR 抓取入候选队列 → 复核转正入库（自动 AI 打标）</p>
-        <div className="flex gap-2">
-          <textarea value={input} onChange={e => setInput(e.target.value)} rows={3}
-            placeholder={"https://www.xiaohongshu.com/explore/...\nhttps://www.xiaohongshu.com/explore/...\n可贴多条笔记链接或整段分享文本"}
-            className="flex-1 border border-stone-200 rounded-xl px-4 py-2 text-sm focus:border-xhs outline-none resize-y" />
-          <button onClick={submit} disabled={crawl.isPending}
-            className="bg-xhs text-white text-sm px-5 py-2 rounded-full font-medium disabled:opacity-50 self-start">
-            {crawl.isPending ? '采集中…' : '批量采集'}
-          </button>
-        </div>
-        {crawl.isError && <div className="text-xs text-rose-500 mt-2">采集失败：{(crawl.error as Error).message}</div>}
-        {crawl.data && (
-          <div className="text-xs text-stone-500 mt-2">
-            共 {crawl.data.total} 条链接，成功 {crawl.data.results.filter((r: any) => !r.error).length}，失败 {crawl.data.results.filter((r: any) => r.error).length}
+      {/* 配置区 */}
+      <div className="bg-white rounded-2xl p-4 border border-stone-100 mb-3">
+        <h2 className="font-semibold text-stone-800 text-[15px] mb-1">发现 · 按画风搜作品</h2>
+        <p className="text-xs text-stone-400 mb-3">上传参考图（AI 自动识别画风标签）<b>或</b>直接选画风标签 → 用标签去多平台搜帖子 → AI 质检过滤广告/照片 → 复核入库</p>
+        <div className="flex gap-4 flex-wrap">
+          {/* 参考图入口 */}
+          <div className="shrink-0">
+            {ref ? (
+              <div className="relative w-28 h-28">
+                <img src={ref.imageUrl} className="w-28 h-28 object-cover rounded-xl border-2 border-xhs" alt="参考图" />
+                <button onClick={() => setSelectedRef(null)} className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-stone-700 text-white text-sm flex items-center justify-center shadow" title="清除参考图，改用纯标签搜">×</button>
+                <span className="absolute -bottom-2 left-1/2 -translate-x-1/2 text-[9px] bg-xhs text-white rounded-full px-2 py-0.5 whitespace-nowrap">AI 识别画风</span>
+              </div>
+            ) : (
+              <div onClick={() => document.getElementById('discover-file')?.click()}
+                onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); loadFile(e.dataTransfer.files?.[0] ?? null); }}
+                className="w-28 h-28 border-2 border-dashed border-stone-200 rounded-xl flex items-center justify-center text-center cursor-pointer hover:border-xhs hover:bg-xhs-soft/30">
+                <span className="text-[11px] text-stone-400 px-2 whitespace-pre-line">{upload.isPending ? 'AI识别中…' : '📋 可选\n拖入参考图\nAI建议画风'}</span>
+                <input id="discover-file" type="file" accept="image/*" className="hidden" onChange={e => loadFile(e.target.files?.[0] ?? null)} />
+              </div>
+            )}
           </div>
-        )}
-      </div>
 
-      {/* 米画师按画风批量搜（playwright 驱动，免登录） */}
-      <div className="bg-white rounded-2xl p-5 border border-stone-100 mt-3">
-        <h2 className="font-semibold text-stone-800 text-[15px] mb-1">米画师 · 按画风批量搜</h2>
-        <p className="text-xs text-stone-400 mb-3">选画风标签 → playwright 驱动米画师页面抓取作品 → 入候选队列（免登录，绕过签名）</p>
-        <div className="flex gap-2 flex-wrap items-center">
-          <select value={mhsTag} onChange={e => setMhsTag(e.target.value)} className="text-[13px] border border-stone-200 rounded-full px-3 py-2">
-            {(mhsTagsQ.data ?? []).map(t => <option key={t.id} value={t.name}>{t.name}（{t.type === 'skill_tag' ? '画风' : '类别'}）</option>)}
-          </select>
-          <label className="text-[12px] text-stone-500">数量
-            <input type="number" value={mhsLimit} min={5} max={60} onChange={e => setMhsLimit(Number(e.target.value))}
-              className="w-16 ml-1 border border-stone-200 rounded-full px-2 py-1 text-center" />
-          </label>
-          <button onClick={() => mhsCrawl.mutate({ tag: mhsTag, limit: mhsLimit })} disabled={mhsCrawl.isPending}
-            className="bg-xhs text-white text-sm px-5 py-2 rounded-full font-medium disabled:opacity-50">
-            {mhsCrawl.isPending ? '搜集中…（约30-60秒）' : '🔍 按画风搜集'}
-          </button>
-          {mhsCrawl.data && <span className="text-xs text-stone-500">抓到 {mhsCrawl.data.total} 张 → 候选队列</span>}
-          {mhsCrawl.isError && <span className="text-xs text-rose-500">失败：{(mhsCrawl.error as Error).message}</span>}
-        </div>
-      </div>
-
-      <div className="flex items-center justify-between mb-2.5 mt-4 px-1">
-        <span className="text-[13px] text-stone-500">待复核候选 <b className="text-stone-700">{candsQ.data?.length ?? 0}</b></span>
-      </div>
-
-      <div className="space-y-3">
-        {candsQ.data?.map(c => {
-          const ch = getChoice(c.id);
-          return (
-            <div key={c.id} className="bg-white rounded-2xl p-4 border border-stone-100">
-              <div className="flex gap-4">
-                {/* 缩略图 */}
-                <div className="flex gap-2 shrink-0">
-                  {c.raw.images.slice(0, 4).map((im, i) => (
-                    <img key={i} src={im.url} referrerPolicy="no-referrer"
-                      className="w-20 h-20 object-cover rounded-lg bg-stone-100"
-                      onError={e => ((e.target as HTMLImageElement).style.opacity = '0.3')} alt="" />
-                  ))}
-                </div>
-                {/* 信息 */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-medium text-stone-800 text-sm">{c.raw.title}</span>
-                    <span className="text-[11px] text-stone-400">{c.raw.images.length} 张图</span>
-                  </div>
-                  <div className="text-[12px] text-stone-500 mt-0.5">画师：{c.artistName || '未知'} · 来源：小红书</div>
-                  <div className="flex gap-1 flex-wrap mt-1.5">
-                    {c.raw.tags.map((t, i) => <span key={i} className="text-[10px] text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded">{t}</span>)}
+          <div className="flex-1 min-w-0">
+            {/* 全维度标签，按维度分组 */}
+            <div className="text-[12px] text-stone-500 mb-1">画风标签（点击多选，可跨维度组合{upload.isPending ? '，AI 建议中…' : ref ? '，已按参考图预选' : ''}）</div>
+            <div className="space-y-1 max-h-40 overflow-auto pr-1">
+              {dimRows.map(row => (
+                <div key={row.code} className="flex items-start gap-2">
+                  <span className="text-[11px] text-stone-400 w-8 shrink-0 pt-0.5">{row.label}</span>
+                  <div className="flex gap-1 flex-wrap">
+                    {row.tags.map(t => {
+                      const on = selectedLabels.has(t.label);
+                      return <span key={t.id} onClick={() => toggleLabel(t.label)}
+                        className={`text-[12px] px-2.5 py-0.5 rounded-full cursor-pointer border ${on ? 'bg-xhs text-white border-xhs' : 'bg-white text-stone-500 border-stone-200 hover:border-xhs'}`}>{t.label}</span>;
+                    })}
                   </div>
                 </div>
-              </div>
-              {/* 操作：转正 / 丢弃 */}
-              <div className="flex items-center gap-2 mt-3 pt-3 border-t border-stone-100 flex-wrap">
-                <label className="flex items-center gap-1 text-[12px] text-stone-600">
-                  <input type="checkbox" checked={ch.newArtist} className="accent-[#FF2442]"
-                    onChange={e => setChoice(s => ({ ...s, [c.id]: { ...ch, newArtist: e.target.checked, artistId: e.target.checked ? '' : ch.artistId } }))} />
-                  新建画师「{c.artistName}」
-                </label>
-                {!ch.newArtist && (
-                  <select value={ch.artistId} onChange={e => setChoice(s => ({ ...s, [c.id]: { ...ch, artistId: e.target.value } }))}
-                    className="text-[12px] border border-stone-200 rounded-full px-2 py-1">
-                    <option value="">选择已有画师…</option>
-                    {artistsQ.data?.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
-                  </select>
-                )}
-                <button
-                  onClick={() => promote.mutate({ id: c.id, body: ch.newArtist ? { newArtist: true } : { artistId: Number(ch.artistId) } })}
-                  disabled={promote.isPending || (!ch.newArtist && !ch.artistId)}
-                  className="ml-auto bg-xhs text-white text-[12px] px-4 py-1.5 rounded-full font-medium disabled:opacity-40">
-                  {promote.isPending ? '转正中…' : '转正入库（含 AI 打标）'}
-                </button>
-                <button onClick={() => reject.mutate(c.id)}
-                  className="text-[12px] text-stone-500 border border-stone-200 px-3 py-1.5 rounded-full hover:bg-stone-50">丢弃</button>
-              </div>
+              ))}
+              {!dimRows.length && <span className="text-[11px] text-stone-400">词表未加载</span>}
             </div>
-          );
-        })}
-        {!candsQ.isLoading && !candsQ.data?.length && (
-          <div className="text-center py-16">
-            <div className="text-5xl mb-3">🔍</div>
-            <div className="text-stone-400 text-sm">没有待复核候选，贴个小红书笔记链接开始采集</div>
+
+            {/* 平台 + 搜索 */}
+            <div className="flex items-center gap-3 flex-wrap mt-3">
+              <div className="flex gap-1.5">
+                {PLATFORMS.map(p => {
+                  const on = platforms.has(p.key);
+                  return <span key={p.key} onClick={() => togglePlatform(p.key)}
+                    className={`text-[12px] px-2.5 py-1 rounded-full cursor-pointer border ${on ? 'bg-stone-700 text-white border-stone-700' : 'bg-white text-stone-500 border-stone-200'}`}>{p.label}</span>;
+                })}
+              </div>
+              {platforms.has('xiaohongshu') && <span className="text-[11px] text-amber-600">⚠ 小红书需配置 XHS_COOKIE</span>}
+              <button onClick={doSearch} disabled={running || startM.isPending || (!selectedRef && !selectedLabels.size) || !platforms.size}
+                className="text-[13px] bg-xhs text-white rounded-full px-5 py-2 font-medium disabled:opacity-40">
+                {startM.isPending ? '发起中…' : running ? '搜索中…' : (selectedRef ? '🔍 按识别的画风搜' : '🔍 按标签搜作品')}
+              </button>
+            </div>
           </div>
-        )}
+        </div>
       </div>
+
+      {/* 进度条 */}
+      {task && running && (
+        <div className="bg-white rounded-2xl p-4 border border-stone-100 mb-3">
+          <div className="flex items-center justify-between text-[13px] text-stone-600 mb-2">
+            <span>搜索质检中…</span>
+            <span className="text-stone-400">{task.done}/{task.total || '…'} 张</span>
+          </div>
+          <div className="h-2 bg-stone-100 rounded-full overflow-hidden">
+            <div className="h-full bg-xhs transition-all" style={{ width: task.total ? `${Math.round(task.done / task.total * 100)}%` : '8%' }} />
+          </div>
+          <div className="text-[11px] text-stone-400 mt-1.5">量大时约需数分钟，可离开稍后回来看结果</div>
+        </div>
+      )}
+      {task && task.status === 'failed' && <div className="text-center text-rose-500 text-sm py-6">搜索失败，请重试</div>}
+
+      {/* 结果 */}
+      {task?.status === 'ok' && (
+        <div>
+          <div className="text-[13px] text-stone-500 mb-2 px-1">按质量分排序 · {results.length} 张（AI 已过滤广告/照片/低质）</div>
+          {!results.length && <div className="text-center text-stone-400 py-12">没有符合质量的结果，换个画风或平台试试</div>}
+          <div className="masonry columns-2 md:columns-3 lg:columns-4 xl:columns-5 2xl:columns-6">
+            {results.map(r => (
+              <div key={r.id} className="mb-2.5 break-inside-avoid bg-white rounded-xl overflow-hidden border border-stone-100 card-hover">
+                <div className="relative cursor-zoom-in" onClick={() => { setViewResult(r); setViewIdx(0); }}>
+                  <img src={r.imageUrl || ''} referrerPolicy="no-referrer" className="w-full object-cover" style={{ aspectRatio: '3/4' }}
+                    onError={e => ((e.target as HTMLImageElement).style.opacity = '0.3')} alt="" />
+                  {r.quality != null && <span className="absolute top-2 left-2 text-[10px] px-1.5 py-0.5 rounded bg-black/50 text-white">质 {r.quality.toFixed(0)}</span>}
+                  <span className="absolute bottom-2 right-2 text-[10px] px-1.5 py-0.5 rounded bg-black/40 text-white">{PLATFORM_LABEL[r.platform] || r.platform}</span>
+                </div>
+                <div className="p-2">
+                  <div className="text-[11px] text-stone-600 truncate">{r.title || '未命名'}</div>
+                  <div className="text-[10px] text-stone-400">画师：{r.author || '未知'}</div>
+                  <div className="flex items-center justify-between mt-1.5">
+                    <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${TIER_LABEL[r.tier]?.cls || ''}`}>{TIER_LABEL[r.tier]?.label || r.tier}</span>
+                    {r.tier === 'tier1' && (
+                      <div className="flex gap-1">
+                        <button onClick={() => promoteM.mutate(r.id)} disabled={promoteM.isPending} className="text-[10px] text-xhs border border-xhs/30 rounded-full px-2 py-0.5 hover:bg-xhs-soft">入库</button>
+                        <button onClick={() => rejectM.mutate(r.id)} className="text-[10px] text-stone-400 border border-stone-200 rounded-full px-2 py-0.5">丢弃</button>
+                      </div>
+                    )}
+                    {r.tier === 'promoted' && <span className="text-[10px] text-emerald-600">✓ 已入库</span>}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 大图查看 */}
+      {viewResult && viewImgs.length > 0 && (
+        <div className="fixed inset-0 bg-black/92 z-[60] flex flex-col" onClick={() => setViewResult(null)}>
+          <div className="flex items-center justify-between px-4 md:px-6 pt-4 text-white/80 text-xs md:text-sm shrink-0" onClick={e => e.stopPropagation()}>
+            <span className="truncate">{viewResult.title || '未命名'} · 画师：{viewResult.author || '未知'} · {PLATFORM_LABEL[viewResult.platform] || viewResult.platform}</span>
+            <span className="shrink-0 ml-2">{viewIdx + 1}/{viewImgs.length} · ←/→ · ESC</span>
+          </div>
+          <div className="flex-1 overflow-y-auto flex justify-center p-3 md:p-6" onClick={() => setViewResult(null)}>
+            <div className="my-auto flex flex-col items-center gap-3" onClick={e => e.stopPropagation()}>
+              <div className="relative">
+                <img src={viewImgs[viewIdx]} referrerPolicy="no-referrer" className="max-h-[74vh] max-w-full rounded-xl object-contain shadow-2xl" alt="" />
+                {viewImgs.length > 1 && <button onClick={() => setViewIdx(i => (i - 1 + viewImgs.length) % viewImgs.length)} className="absolute left-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/45 text-white text-xl hover:bg-xhs">‹</button>}
+                {viewImgs.length > 1 && <button onClick={() => setViewIdx(i => (i + 1) % viewImgs.length)} className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/45 text-white text-xl hover:bg-xhs">›</button>}
+              </div>
+              {viewResult.sourceUrl && <a href={viewResult.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-[12px] text-white/50 border border-white/15 rounded-full px-3 py-1 hover:bg-white/10">查看原页 →</a>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 历史参考图快捷复用 */}
+      {(refsQ.data ?? []).length > 0 && (
+        <div className="mt-4">
+          <div className="text-[12px] text-stone-400 mb-1.5">历史参考图</div>
+          <div className="flex gap-2 flex-wrap">
+            {(refsQ.data ?? []).map(r => (
+              <div key={r.id} className="relative">
+                <button onClick={() => { setSelectedRef(r.id); setSelectedLabels(new Set((r.aiTags ?? []).map(t => t.label).filter(Boolean))); }}
+                  className={`block w-14 h-14 rounded-lg overflow-hidden border-2 ${selectedRef === r.id ? 'border-xhs' : 'border-stone-200'}`}>
+                  <img src={r.imageUrl} className="w-full h-full object-cover" alt="" />
+                </button>
+                <button onClick={() => { if (confirm('删除此参考图？')) { deleteRef.mutate(r.id); if (selectedRef === r.id) setSelectedRef(null); } }}
+                  className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-rose-500 text-white text-xs flex items-center justify-center shadow" title="删除">×</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -88,7 +88,7 @@ export function normalizeOutput(parsed: any, labelMap: Map<string, number>): Set
   return ids;
 }
 
-async function callGemini(b64: string, mime: string, prompt: string): Promise<string | null> {
+export async function callGemini(b64: string, mime: string, prompt: string): Promise<string | null> {
   const body = {
     systemInstruction: { parts: [{ text: prompt }] },
     contents: [{ role: 'user', parts: [
@@ -136,4 +136,37 @@ export async function callBoth(b64: string, mime: string, prompt: string) {
     geminiError: g.status === 'rejected' ? (g.reason as Error).message : null,
     doubaoError: d.status === 'rejected' ? (d.reason as Error).message : null,
   };
+}
+
+// 采集质检闸门：判断一张图是不是「原创插画作品」而非广告/文字海报/日常照，并给质量分。
+// 用单模型（Gemini）控成本。AI 故障时中性放行（isArtwork=true, quality=5），
+// 避免模型挂掉导致全部被拦、入库为空——此时退化为原「取前 N 张」行为。
+const GATE_PROMPT = `你是插画作品筛选员。判断给你的这张图属于哪一类，并给质量分。
+只输出 JSON，格式：{"is_artwork":true/false,"quality":0-10,"category":"...","reason":"..."}
+判定规则：
+- is_artwork=true 仅当这是一张原创绘画/插画/漫画作品（人物、场景、设定等手绘或数字绘画）。
+- is_artwork=false 若是：广告/商单推广图、纯文字海报或公告（约稿/涨价/课程/福利）、日常照片、表情包、截图、logo。
+- quality：作为「画师作品集封面」的展示质量，0=极差(文字满屏/模糊/无绘画元素)，10=完成度高的精美插画。非作品一律给 0~2。
+- category：artwork / ad / text_poster / photo / other 之一。
+不要输出任何解释性文字、不要用 markdown 代码块包裹。`;
+
+export type GateResult = { isArtwork: boolean; quality: number; category: string; reason: string; error: string | null };
+
+export async function gateArtwork(b64: string, mime: string): Promise<GateResult> {
+  try {
+    const raw = await callGemini(b64, mime, GATE_PROMPT);
+    const parsed = extractJson(raw);
+    if (!parsed) throw new Error('gate 输出无法解析');
+    const quality = Math.max(0, Math.min(10, Number(parsed.quality) || 0));
+    return {
+      isArtwork: parsed.is_artwork === true,
+      quality,
+      category: String(parsed.category || 'other'),
+      reason: String(parsed.reason || ''),
+      error: null,
+    };
+  } catch (e) {
+    // 中性放行：不因 AI 故障漏掉真作品
+    return { isArtwork: true, quality: 5, category: 'unknown', reason: '', error: (e as Error).message };
+  }
 }

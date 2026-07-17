@@ -42,10 +42,11 @@ export class CandidateController {
     return this.candidateService.reject(id);
   }
 
-  // 按画师小红书主页爬作品：POST /api/artists/:id/crawl-works  body: { limit?, tag? }
+  // 按画师小红书主页爬作品：POST /api/artists/:id/crawl-works  body: { limit?, tag?, pool?, minQuality? }
+  // pool=候选池大小(先扒N篇择优)，minQuality=AI质检质量分下限(0-10)，过滤广告/文字海报
   @Post('artists/:id/crawl-works')
-  crawlWorks(@Param('id', ParseIntPipe) id: number, @Body() body: { limit?: number; tag?: boolean }) {
-    return this.candidateService.crawlArtistWorks(id, body.limit ?? 8, body.tag ?? false);
+  crawlWorks(@Param('id', ParseIntPipe) id: number, @Body() body: { limit?: number; tag?: boolean; pool?: number; minQuality?: number }) {
+    return this.candidateService.crawlArtistWorks(id, body.limit ?? 5, body.tag ?? false, body.pool ?? 20, body.minQuality ?? 5);
   }
 
   // 按画师微博主页爬作品：POST /api/artists/:id/crawl-works-weibo
