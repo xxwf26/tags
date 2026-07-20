@@ -3,7 +3,9 @@ import { DiscoverService } from './discover.service.js';
 
 @Controller('discover')
 export class DiscoverController {
-  constructor(private readonly discoverService: DiscoverService) {}
+  // 用 new 实例化（项目所有 controller 的惯例）：tsx dev 不 emit decorator metadata，
+  // 构造器 DI 在 dev 下注入不了；new 在 dev/prod 都生效。DiscoverService 逻辑不变。
+  private readonly discoverService = new DiscoverService();
 
   // 发起搜索：POST /api/discover/start {referenceId?, tags?:[{label}], platforms}
   @Post('start')
