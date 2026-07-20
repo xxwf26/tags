@@ -3,7 +3,7 @@ import { DiscoverService } from './discover.service.js';
 
 @Controller('discover')
 export class DiscoverController {
-  private readonly discoverService = new DiscoverService();
+  constructor(private readonly discoverService: DiscoverService) {}
 
   // 发起搜索：POST /api/discover/start {referenceId?, tags?:[{label}], platforms}
   @Post('start')

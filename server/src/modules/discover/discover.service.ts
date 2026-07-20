@@ -2,7 +2,7 @@
 // → 复核 → 正式入库。异步执行：start 立即返回 sessionId，runSearch 后台跑并写进度。
 // 有参考图时(image 模式)：CLIP 视觉相似度精排——每张候选与参考图算余弦相似度，按 相似度×质量 排序。
 // CLIP 推理走独立 worker 线程（embed/clip.ts），不阻塞主线程。无参考图(tags 模式)：纯质量排序。
-import { readFile } from 'node:fs/promises';
+import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { join, basename } from 'node:path';
 import { db, schema } from '../../database/db.js';
 import { eq, and, desc, isNotNull } from 'drizzle-orm';
@@ -13,7 +13,7 @@ import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
 import { logOperation } from '../operation/op.js';
 import { gateArtwork } from '../tagging/ai.js';
 import { embedImage, cosine, isEmbedAvailable } from '../embed/clip.js';
-import { promoteSearchResult } from '../support/promote-helpers.js';
+import { findDuplicateArtwork, findOrCreateArtist } from './promote-helpers.js';
 import { Injectable } from '@nestjs/common';
 
 const PER_KW = 20;          // 每平台每关键词召回上限
@@ -98,7 +98,7 @@ export class DiscoverService {
             for (const a of arts) pool.push({ platform, imageUrl: a.imageUrl, sourceUrl: `https://www.mihuashi.com/artworks/${a.mhsId}`, title: `米画师·${kw}`, author: a.author ?? null, tags: [kw], allImages: [a.imageUrl] });
           } else if (platform === 'weibo') {
             const imgs = await searchWeiboByKeyword(kw, PER_KW);
-            for (const im of imgs) pool.push({ platform, imageUrl: im.url, sourceUrl: im.url, title: im.title || `微博·${kw}`, author: null, tags: [kw], allImages: [im.url] });
+            for (const im of imgs) pool.push({ platform, imageUrl: im.url, sourceUrl: im.sourceUrl || im.url, title: im.title || `微博·${kw}`, author: im.author ?? null, tags: [kw], allImages: [im.url] });
           } else if (platform === 'xiaohongshu') {
             if (!xhsCookie) { console.error('[discover] 小红书未配置 XHS_COOKIE，跳过'); continue; }
             const notes = await searchXhsByKeyword(kw, PER_KW, xhsCookie);
@@ -226,10 +226,42 @@ export class DiscoverService {
     return { id, tier: 'rejected' };
   }
 
-  // 正式入库：tier2 → promoted（共用 promoteSearchResult）
+  // 正式入库：下载图 → 建作品 → 建/找画师 → 同步画师库+画廊
   async promote(id: number) {
     const [result] = await db.select().from(schema.searchResults).where(eq(schema.searchResults.id, id));
     if (!result) throw new Error('结果不存在');
-    return promoteSearchResult(result, { filePrefix: 'discover', logType: 'discover_promote' });
+    if (!result.imageUrl) throw new Error('结果无图片URL');
+
+    const uploadsDir = join(process.cwd(), 'uploads');
+    await mkdir(uploadsDir, { recursive: true });
+    const { buf, type } = await downloadImage(result.imageUrl);
+    let imageHash: string | null = null;
+    try { imageHash = await aHash(buf); } catch {}
+
+    // 库内去重：这张图已在作品库则不重复入库，直接指向已有作品
+    const dupId = await findDuplicateArtwork(imageHash);
+    if (dupId) {
+      await db.update(schema.searchResults).set({ tier: 'promoted', promotedArtworkId: dupId }).where(eq(schema.searchResults.id, id));
+      return { id, tier: 'promoted', artworkId: dupId, duplicate: true };
+    }
+
+    const ext = type.includes('png') ? 'png' : type.includes('webp') ? 'webp' : 'jpg';
+    const filename = `discover-${id}-${Date.now()}.${ext}`;
+    await writeFile(join(uploadsDir, filename), buf);
+
+    // 找/建画师（按署名精确匹配）
+    const artistId = await findOrCreateArtist(result.author, result.platform, result.sourceUrl);
+
+    const [aw] = await db.insert(schema.artworks).values({
+      artistId, title: result.title || null,
+      imageUrl: `/uploads/${filename}`, thumbUrl: `/uploads/${filename}`,
+      imageHash, sourcePlatform: result.platform || 'discover', sourceUrl: result.sourceUrl || null,
+      tagStatus: 'pending',
+    });
+    const artworkId = (aw as any).insertId;
+
+    await db.update(schema.searchResults).set({ tier: 'promoted', promotedArtworkId: artworkId }).where(eq(schema.searchResults.id, id));
+    await logOperation({ type: 'discover_promote', targetType: 'search_result', targetId: id, summary: `发现结果 #${id} 正式入库 → 作品 #${artworkId}` });
+    return { id, tier: 'promoted', artworkId, artistId };
   }
 }

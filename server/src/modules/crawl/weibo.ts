@@ -16,7 +16,7 @@ async function getBrowser() {
 }
 export async function closeBrowser() { if (_browser) { await _browser.close().catch(() => {}); _browser = null; } }
 
-export type WeiboImage = { url: string; noteId?: string; title?: string };
+export type WeiboImage = { url: string; noteId?: string; title?: string; sourceUrl?: string; author?: string };
 
 // 抓某微博用户的配图，最多 limit 张。maxPages 控制翻页上限。
 export async function fetchWeiboImages(uid: string, limit = 8, maxPages = 5): Promise<{ nickname: string; items: WeiboImage[] }> {
