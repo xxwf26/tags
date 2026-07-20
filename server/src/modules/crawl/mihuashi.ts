@@ -4,10 +4,19 @@
 // 返回假的"签名错误"403。必须用反检测参数 + 抹掉 webdriver 标志才能过。
 // 共享浏览器实例，避免反复启动。
 import { chromium, type Browser, type BrowserContext } from 'playwright';
-import { spawn } from 'node:child_process';
-import { join } from 'node:path';
 
 export type MhsArtwork = { mhsId: number; imageUrl: string; width: number | null; height: number | null; author: string | null; authorUrl: string | null };
+
+// 从 search API 响应的单条作品里尽力提取画师名/主页（字段名跨版本不稳，多候选兜底）
+function extractAuthor(a: any): { author: string | null; authorUrl: string | null } {
+  const u = a?.author || a?.user || a?.painter || a?.creator || null;
+  const author = a?.author_name || a?.nickname || u?.name || u?.nickname || u?.username || null;
+  const pid = a?.author_id || a?.user_id || u?.id || u?.profile_id || null;
+  return {
+    author: author ? String(author).trim() : null,
+    authorUrl: pid ? `https://www.mihuashi.com/profiles/${pid}` : null,
+  };
+}
 
 const STEALTH_ARGS = ['--disable-blink-features=AutomationControlled', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'];
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
@@ -15,7 +24,14 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 let _browser: Browser | null = null;
 async function getBrowser(): Promise<Browser> {
   if (!_browser || !_browser.isConnected()) {
-    _browser = await chromium.launch({ headless: true, args: STEALTH_ARGS });
+    try {
+      _browser = await chromium.launch({ headless: true, args: STEALTH_ARGS });
+    } catch (e: any) {
+      _browser = null;
+      throw new Error(`米画师浏览器启动失败（chromium 内核缺失或环境异常）: ${e.message}`);
+    }
+    // 浏览器意外崩溃时清空单例，下次调用会重新 launch，避免复用死实例连锁失败
+    _browser.on('disconnected', () => { _browser = null; });
   }
   return _browser;
 }
@@ -35,50 +51,48 @@ async function stealthContext(b: Browser): Promise<BrowserContext> {
 }
 
 export async function searchMihuashi(tagName: string, limit = 30): Promise<MhsArtwork[]> {
-  // 走独立子进程（src/scripts/mhs-search.mts）：米画师会对长运行进程内复用的浏览器做指纹标记，
-  // 标记后 /artworks 页不再渲染画风筛选 chip → 找不到标签 → 0 结果。
-  // one-shot 子进程每次新开浏览器，行为与独立脚本一致。chip 渲染有反爬 flaky，故失败时重试最多 2 次。
-  const scriptPath = join(process.cwd(), 'src', 'scripts', 'mhs-search.mts');
-  const runOnce = (): Promise<MhsArtwork[]> => new Promise((resolve) => {
-    // 必须用 tsx 运行 .mts：原生 node 跑 ESM 时 Playwright 在米画师页面行为异常（chip 不渲染）。
-    // tagName 走 stdin 传递：Windows 上 execFile/spawn 的中文 argv/env 会被编码破坏成乱码，stdin 字节流 UTF-8 安全。
-    const child = spawn(process.execPath, ['--import', 'tsx', scriptPath, String(limit)], {
-      windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    let stdout = '', stderr = '';
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (d: string) => { stdout += d; });
-    child.stderr.on('data', (d: string) => { stderr += d; });
-    const timer = setTimeout(() => { child.kill(); }, 120000);
-    child.on('error', (e) => { clearTimeout(timer); console.error(`[mhs] spawn 失败 "${tagName}": ${e.message}`); resolve([]); });
-    child.on('close', () => {
-      clearTimeout(timer);
+  // 把标签名转成 tag id，直接用 ?tags={id} 导航（画风/类型标签统一走这条路，不再点 DOM）
+  const idMap = await getTagIdMap();
+  const tagId = idMap.get(tagName);
+  if (!tagId) { console.error(`[mihuashi] 未知标签「${tagName}」（不在米画师 43 个官方标签内）`); return []; }
+
+  const b = await getBrowser();
+  const ctx = await stealthContext(b);
+  const p = await ctx.newPage();
+  const arts: MhsArtwork[] = [];
+  const seen = new Set<number>();
+  p.on('response', async r => {
+    if (r.url().includes('/api/v1/artworks/search')) {
       try {
-        const j = JSON.parse(stdout);
-        console.log(`[mhs] 搜索 "${tagName}": ${j.arts?.length || 0} 张${j.error ? '（' + j.error + '）' : ''}`);
-        resolve((j.arts || []) as MhsArtwork[]);
-      } catch (e: any) {
-        console.error(`[mhs] 解析子进程输出失败: ${e.message}${stderr ? ' stderr=' + stderr.slice(0, 200) : ''}`);
-        resolve([]);
-      }
-    });
-    child.stdin.write(tagName);
-    child.stdin.end();
+        const j = JSON.parse(await r.text());
+        for (const a of j.artworks || []) {
+          if (a.id && !seen.has(a.id)) {
+            seen.add(a.id);
+            const { author, authorUrl } = extractAuthor(a);
+            arts.push({ mhsId: a.id, imageUrl: a.url, width: a.width ?? null, height: a.height ?? null, author, authorUrl });
+          }
+        }
+      } catch {}
+    }
   });
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    const arts = await runOnce();
-    if (arts.length) return arts;
-    if (attempt < 3) console.log(`[mhs] "${tagName}" 第 ${attempt} 次无结果，重试…`);
+  try {
+    // 带标签直接进筛选后的列表页；order=1 最新，tags={id} 指定画风/类型
+    await p.goto(`https://www.mihuashi.com/artworks?order=1&tags=${tagId}`, { waitUntil: 'networkidle', timeout: 45000 });
+    await p.waitForTimeout(2000);
+    for (let i = 0; i < 25 && arts.length < limit; i++) {
+      await p.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+      await p.waitForTimeout(1500);
+    }
+  } catch (e) {
+    // 超时/导航异常也返回已收集的
+  } finally {
+    await ctx.close();
   }
-  return [];
+  return arts.slice(0, limit);
 }
 
-// 拉米画师可用画风标签（供前端下拉）。每次要 spawn 浏览器 ~9s，加内存缓存避免页面加载卡顿。
-let _tagsCache: { data: { id: number; name: string; type: string }[]; ts: number } | null = null;
-const TAGS_TTL = 10 * 60 * 1000; // 10 分钟
+// 拉米画师可用画风标签（供前端下拉）
 export async function fetchMihuashiTags(): Promise<{ id: number; name: string; type: string }[]> {
-  if (_tagsCache && Date.now() - _tagsCache.ts < TAGS_TTL) return _tagsCache.data;
   const b = await getBrowser();
   const ctx = await stealthContext(b);
   const p = await ctx.newPage();
@@ -92,37 +106,17 @@ export async function fetchMihuashiTags(): Promise<{ id: number; name: string; t
     await p.goto('https://www.mihuashi.com/artworks?order=1', { waitUntil: 'networkidle', timeout: 45000 });
     await p.waitForTimeout(1500);
   } finally { await ctx.close(); }
-  const data = tags as { id: number; name: string; type: string }[];
-  _tagsCache = { data, ts: Date.now() };
-  return data;
+  return tags;
 }
 
-export type MhsChip = { category: string; name: string };
-
-// 抓 /artworks 页真实的画风筛选 chip（画风/技法 + 类型），作为发现页下拉来源。
-// 比配置接口的 43 个全量标签更准：config 里有但页面没 chip 的（如"平涂"）搜不到，不能放进下拉。
-// 走子进程 mhs-chips.mts（one-shot 浏览器，避免长运行进程 chip 不渲染）；失败回退到 config 标签。
-let _chipsCache: { data: MhsChip[]; ts: number } | null = null;
-export async function fetchMihuashiFilterChips(): Promise<MhsChip[]> {
-  if (_chipsCache && Date.now() - _chipsCache.ts < TAGS_TTL) return _chipsCache.data;
-  const scriptPath = join(process.cwd(), 'src', 'scripts', 'mhs-chips.mts');
-  const data: MhsChip[] = await new Promise((resolve) => {
-    const child = spawn(process.execPath, ['--import', 'tsx', scriptPath], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    let stdout = '';
-    child.stdout.setEncoding('utf8');
-    child.stdout.on('data', (d: string) => { stdout += d; });
-    const timer = setTimeout(() => { child.kill(); }, 90000);
-    child.on('error', () => { clearTimeout(timer); resolve([]); });
-    child.on('close', () => {
-      clearTimeout(timer);
-      try { resolve((JSON.parse(stdout).chips || []) as MhsChip[]); }
-      catch { resolve([]); }
-    });
-  });
-  // 子进程失败（反爬/超时）→ 回退到 config 标签，保证下拉不空
-  const result = data.length ? data : (await fetchMihuashiTags()).map(t => ({ category: t.type === 'skill_tag' ? '画风' : '类型', name: t.name }));
-  _chipsCache = { data: result, ts: Date.now() };
-  return result;
+// 标签名 → tag id 的缓存映射。米画师用 ?tags={id} 参数筛选（画风 skill_tag + 类型 art_category_tag 共用同一套 id），
+// 比在页面上点标签按钮稳得多（类型标签藏在未展开下拉里，点不中）。43 个标签基本不变，进程内缓存即可。
+let _tagMap: Map<string, number> | null = null;
+async function getTagIdMap(): Promise<Map<string, number>> {
+  if (_tagMap) return _tagMap;
+  const tags = await fetchMihuashiTags();
+  _tagMap = new Map(tags.map(t => [t.name, t.id]));
+  return _tagMap;
 }
 
 // 用登录态(mhs-auth.json)抓画师主页作品。导航到 profiles/{id} → 页面自己翻页 →
@@ -143,7 +137,8 @@ export async function fetchMihuashiArtistWorks(profileId: string, authPath: stri
         for (const a of j.artworks || []) {
           if (a.id && a.url && !seen.has(a.id)) {
             seen.add(a.id);
-            arts.push({ mhsId: a.id, imageUrl: a.url, width: a.width ?? null, height: a.height ?? null, author: null, authorUrl: null });
+            const { author, authorUrl } = extractAuthor(a);
+            arts.push({ mhsId: a.id, imageUrl: a.url, width: a.width ?? null, height: a.height ?? null, author, authorUrl });
           }
         }
       } catch {}

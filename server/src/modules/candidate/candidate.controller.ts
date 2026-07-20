@@ -1,6 +1,6 @@
 import { Controller, Get, Post, Body, Query, Param, ParseIntPipe } from '@nestjs/common';
 import { CandidateService } from './candidate.service.js';
-import { fetchMihuashiTags, fetchMihuashiFilterChips } from '../crawl/mihuashi.js';
+import { fetchMihuashiTags } from '../crawl/mihuashi.js';
 
 @Controller()
 export class CandidateController {
@@ -18,16 +18,10 @@ export class CandidateController {
     return this.candidateService.createMihuashiBatch(body.tag || '', body.limit || 30);
   }
 
-  // 米画师可用画风标签（config 全量）：GET /api/mihuashi/tags
+  // 米画师可用画风标签：GET /api/mihuashi/tags
   @Get('mihuashi/tags')
   async mihuashiTags() {
     return fetchMihuashiTags();
-  }
-
-  // 米画师页面真实筛选 chip（发现页下拉用）：GET /api/mihuashi/filter-chips
-  @Get('mihuashi/filter-chips')
-  async mihuashiFilterChips() {
-    return fetchMihuashiFilterChips();
   }
 
   // 候选队列：GET /api/candidates?status=pending

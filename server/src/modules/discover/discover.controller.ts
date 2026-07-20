@@ -3,8 +3,8 @@ import { DiscoverService } from './discover.service.js';
 
 @Controller('discover')
 export class DiscoverController {
-  // 用 new 实例化（项目所有 controller 的惯例）：tsx dev 不 emit decorator metadata，
-  // 构造器 DI 在 dev 下注入不了；new 在 dev/prod 都生效。DiscoverService 逻辑不变。
+  // 注：本项目用 tsx/esbuild 运行，不 emit 装饰器元数据，NestJS 构造注入拿不到参数类型 → 注入 undefined。
+  // 故沿用项目一贯的手动实例化（全项目 controller 均如此），不接 DI 容器。
   private readonly discoverService = new DiscoverService();
 
   // 发起搜索：POST /api/discover/start {referenceId?, tags?:[{label}], platforms}
