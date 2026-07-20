@@ -19,6 +19,9 @@ let readyPromise: Promise<void> | null = null;
 let seq = 0;
 let restarts = 0;
 let disabled = false;
+// Windows 上 sharp/libvips 处理某些大图会 GLib segfault，worker 线程隔离不住、会拖垮整个进程。
+// 故默认禁用 CLIP（image 模式自动降级为 tags 纯质量排序，服务器稳定）。需显式 CLIP_ENABLED=1 才开启。
+const clipEnabled = process.env.CLIP_ENABLED === '1';
 
 type Pending = { resolve: (v: number[]) => void; reject: (e: Error) => void; timer: NodeJS.Timeout };
 const pending = new Map<number, Pending>();
@@ -102,5 +105,5 @@ export function cosine(a: number[], b: number[]): number {
 
 // 供调用方在算之前判断是否值得尝试（已永久降级则不必走 image 模式）。
 export function isEmbedAvailable(): boolean {
-  return !disabled;
+  return clipEnabled && !disabled;
 }
