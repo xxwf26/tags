@@ -238,6 +238,13 @@ export async function startDiscover(body: { referenceId?: number | null; tags?: 
 export async function fetchDiscoverTask(sessionId: number): Promise<DiscoverTask> {
   const r = await fetch(BASE + '/discover/task/' + sessionId); if (!r.ok) throw new Error('task failed'); return r.json();
 }
+export type DiscoverSession = {
+  id: number; mode: 'image' | 'tags'; status: string; resultCount: number;
+  tags: string[]; platforms: string[] | null; stats: any; createdAt: string;
+};
+export async function fetchDiscoverSessionsList(limit = 30): Promise<DiscoverSession[]> {
+  const r = await fetch(BASE + '/discover/sessions?limit=' + limit); if (!r.ok) throw new Error('sessions failed'); return r.json();
+}
 export async function fetchDiscoverResults(sessionId: number, tier?: string): Promise<DiscoverResult[]> {
   const q = tier ? '&tier=' + tier : '';
   const r = await fetch(BASE + '/discover/results?sessionId=' + sessionId + q); if (!r.ok) throw new Error('results failed'); return r.json();

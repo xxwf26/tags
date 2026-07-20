@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient, useQueries } from '@tanstack/react-query';
-import { fetchTags, fetchTagsAll, fetchArtworks, fetchArtists, fetchArtist, createArtwork, deleteArtwork, setArtworkTags, updateEngage, tagArtwork, tagBatch, confirmArtwork, searchByImage, createTag, updateTag, deleteTag, createDimension, fetchMihuashiFilterChips, fetchOperations, undoOperation, redoOperation, type Artwork, type Artist, uploadReference, fetchReferences, updateReferenceTags, startSearch, fetchSearchSessions, fetchSearchResults, reviewSearchResult, promoteSearchResult, rejectSearchResult, deleteReference, startDiscover, fetchDiscoverTask, fetchDiscoverResults, reviewDiscover, promoteDiscover, rejectDiscover } from './api'
+import { fetchTags, fetchTagsAll, fetchArtworks, fetchArtists, fetchArtist, createArtwork, deleteArtwork, setArtworkTags, updateEngage, tagArtwork, tagBatch, confirmArtwork, searchByImage, createTag, updateTag, deleteTag, createDimension, fetchMihuashiFilterChips, fetchOperations, undoOperation, redoOperation, type Artwork, type Artist, uploadReference, fetchReferences, updateReferenceTags, startSearch, fetchSearchSessions, fetchSearchResults, reviewSearchResult, promoteSearchResult, rejectSearchResult, deleteReference, startDiscover, fetchDiscoverTask, fetchDiscoverResults, fetchDiscoverSessionsList, reviewDiscover, promoteDiscover, rejectDiscover } from './api'
 
 export function useTags() {
   return useQuery({ queryKey: ['tags'], queryFn: fetchTags });
@@ -170,6 +170,9 @@ export function useDiscoverSessions(ids: number[]) {
 }
 export function useDiscoverResults(sessionId: number, tier?: string) {
   return useQuery({ queryKey: ['discover-results', sessionId, tier], queryFn: () => fetchDiscoverResults(sessionId, tier), enabled: !!sessionId });
+}
+export function useDiscoverSessionsList() {
+  return useQuery({ queryKey: ['discover-sessions-list'], queryFn: () => fetchDiscoverSessionsList(30), staleTime: 5000 });
 }
 export function useReviewDiscover() {
   const qc = useQueryClient();

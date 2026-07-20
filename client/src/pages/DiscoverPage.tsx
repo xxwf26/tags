@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useReferences, useUploadReference, useStartDiscover, useDiscoverSessions, useDiscoverResults, useReviewDiscover, usePromoteDiscover, useRejectDiscover, useDeleteReference } from '../hooks';
+import { useReferences, useUploadReference, useStartDiscover, useDiscoverSessions, useDiscoverResults, useDiscoverSessionsList, useReviewDiscover, usePromoteDiscover, useRejectDiscover, useDeleteReference } from '../hooks';
 
 const PLATFORMS = [
   { key: 'mihuashi', label: '米画师' },
@@ -56,6 +56,7 @@ export function DiscoverPage() {
   const activeTask = activeId ? (taskById.get(activeId) ?? null) : null;
   const activeMeta = sessions.find(s => s.id === activeId);
   const resultsQ = useDiscoverResults(activeTask?.status === 'ok' ? (activeId ?? 0) : 0);
+  const historyQ = useDiscoverSessionsList();
   const ref = (refsQ.data ?? []).find(r => r.id === selectedRef);
 
   // 上传参考图 → AI 建议标签预勾选（只保留命中米画师标签的，避免选到搜不到的词）
@@ -99,6 +100,14 @@ export function DiscoverPage() {
       if (activeId === id) setActiveId(next[next.length - 1]?.id ?? null);
       return next;
     });
+  };
+  // 从历史列表重开一次搜索：加入标签栏并切过去（已在不重复加）
+  const reopenSession = (id: number, label: string) => {
+    setSessions(prev => {
+      if (prev.some(s => s.id === id)) return prev;
+      const next = [...prev, { id, label }]; saveSessions(next); return next;
+    });
+    setActiveId(id);
   };
 
   const anyRunning = sessions.some(s => taskById.get(s.id)?.status === 'running');
@@ -285,6 +294,28 @@ export function DiscoverPage() {
               </div>
               {viewResult.sourceUrl && <a href={viewResult.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-[12px] text-white/50 border border-white/15 rounded-full px-3 py-1 hover:bg-white/10">查看原页 →</a>}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* 发现历史列表：从数据库加载全部历史发现搜索，点击重开 */}
+      {(historyQ.data ?? []).length > 0 && (
+        <div className="mt-4">
+          <div className="text-[12px] text-stone-400 mb-1.5">发现历史（点击重开某次搜索）</div>
+          <div className="space-y-1.5">
+            {(historyQ.data ?? []).map(h => {
+              const inTabs = sessions.some(s => s.id === h.id);
+              const st = h.status || 'running';
+              return (
+                <div key={h.id} className={`flex items-center gap-2 border rounded-lg p-2 cursor-pointer transition-colors ${activeId === h.id ? 'border-xhs bg-xhs-soft/30' : 'border-stone-200 hover:border-stone-300'}`} onClick={() => reopenSession(h.id, h.tags?.join('+') || `#${h.id}`)}>
+                  <span className="text-[12px] text-stone-700 flex-1 min-w-0 truncate">{h.tags?.join('+') || `#${h.id}`}{h.mode === 'image' ? ' · 参考图' : ''}</span>
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${STATUS_BADGE[st] || ''}`}>{STATUS_TEXT[st] || st}</span>
+                  <span className="text-[10px] text-stone-400">{h.resultCount} 张</span>
+                  <span className="text-[10px] text-stone-300 hidden md:inline">{new Date(h.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+                  {inTabs && <span className="text-[9px] text-xhs">已在列表</span>}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
