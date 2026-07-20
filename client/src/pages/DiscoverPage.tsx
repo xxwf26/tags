@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useReferences, useUploadReference, useStartDiscover, useDiscoverSessions, useDiscoverResults, useDiscoverSessionsList, useReviewDiscover, usePromoteDiscover, useRejectDiscover, useDeleteReference } from '../hooks';
+import { useReferences, useUploadReference, useStartDiscover, useDiscoverSessions, useDiscoverResults, useDiscoverSessionsList, useReviewDiscover, usePromoteDiscover, useRejectDiscover, useDeleteReference, useAbortDiscover } from '../hooks';
 
 const PLATFORMS = [
   { key: 'mihuashi', label: '米画师' },
@@ -37,6 +37,7 @@ export function DiscoverPage() {
   const refsQ = useReferences();
   const upload = useUploadReference();
   const startM = useStartDiscover();
+  const abortM = useAbortDiscover();
   const reviewM = useReviewDiscover();
   const promoteM = usePromoteDiscover();
   const rejectM = useRejectDiscover();
@@ -55,7 +56,9 @@ export function DiscoverPage() {
   const taskById = new Map<number, any>(sessions.map((s, i) => [s.id, sessionQueries[i]?.data]));
   const activeTask = activeId ? (taskById.get(activeId) ?? null) : null;
   const activeMeta = sessions.find(s => s.id === activeId);
-  const resultsQ = useDiscoverResults(activeTask?.status === 'ok' ? (activeId ?? 0) : 0);
+  // ok（正常完成）与 failed（被终止）都可能有结果：终止时保留了已完成部分
+  const hasResults = activeTask?.status === 'ok' || activeTask?.status === 'failed';
+  const resultsQ = useDiscoverResults(hasResults ? (activeId ?? 0) : 0);
   const historyQ = useDiscoverSessionsList();
   const ref = (refsQ.data ?? []).find(r => r.id === selectedRef);
 
@@ -211,7 +214,13 @@ export function DiscoverPage() {
         <div className="bg-white rounded-2xl p-4 border border-stone-100 mb-3">
           <div className="flex items-center justify-between text-[13px] text-stone-600 mb-2">
             <span>搜索质检中… · {activeMeta?.label}</span>
-            <span className="text-stone-400">{activeTask.done}/{activeTask.total || '…'} 张</span>
+            <div className="flex items-center gap-3">
+              <span className="text-stone-400">{activeTask.done}/{activeTask.total || '…'} 张</span>
+              {activeId && (
+                <button onClick={() => abortM.mutate(activeId)} disabled={abortM.isPending}
+                  className="text-[12px] text-rose-500 border border-rose-300 rounded-full px-3 py-1 hover:bg-rose-50 disabled:opacity-40">⏹ 终止</button>
+              )}
+            </div>
           </div>
           <div className="h-2 bg-stone-100 rounded-full overflow-hidden">
             <div className="h-full bg-xhs transition-all" style={{ width: activeTask.total ? `${Math.round(activeTask.done / activeTask.total * 100)}%` : '8%' }} />
@@ -219,10 +228,10 @@ export function DiscoverPage() {
           <div className="text-[11px] text-stone-400 mt-1.5">量大时约需数分钟，可离开稍后回来看结果；可同时再发起别的标签搜索</div>
         </div>
       )}
-      {activeTask && activeTask.status === 'failed' && <div className="text-center text-rose-500 text-sm py-6">搜索失败，请重试</div>}
+      {activeTask && activeTask.status === 'failed' && <div className="text-center text-rose-500 text-sm py-6">搜索已终止或失败{results.length ? '（下方为已完成部分的结果）' : ''}</div>}
 
-      {/* 结果（当前 session） */}
-      {activeTask?.status === 'ok' && (
+      {/* 结果（当前 session：正常完成 ok，或被终止 failed 的已完成部分） */}
+      {activeTask && hasResults && (results.length > 0 || activeTask.status === 'ok') && (
         <div>
           {/* 漏斗：让"0 结果 / 结果少"能看清卡在哪个环节 */}
           {activeTask.stats && (

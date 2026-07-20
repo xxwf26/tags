@@ -25,6 +25,12 @@ export class DiscoverController {
     return this.discoverService.listSessions(limit ? Number(limit) : 30);
   }
 
+  // 终止搜索：POST /api/discover/abort/:sessionId
+  @Post('abort/:sessionId')
+  abort(@Param('sessionId', ParseIntPipe) sessionId: number) {
+    return this.discoverService.abort(sessionId);
+  }
+
   // 结果列表：GET /api/discover/results?sessionId=X&tier=tier1
   @Get('results')
   results(@Query('sessionId') sessionId: string, @Query('tier') tier?: string) {

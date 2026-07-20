@@ -245,6 +245,10 @@ export type DiscoverSession = {
 export async function fetchDiscoverSessionsList(limit = 30): Promise<DiscoverSession[]> {
   const r = await fetch(BASE + '/discover/sessions?limit=' + limit); if (!r.ok) throw new Error('sessions failed'); return r.json();
 }
+export async function abortDiscover(sessionId: number) {
+  const r = await fetch(BASE + '/discover/abort/' + sessionId, { method: 'POST' });
+  if (!r.ok) throw new Error('abort failed'); return r.json();
+}
 export async function fetchDiscoverResults(sessionId: number, tier?: string): Promise<DiscoverResult[]> {
   const q = tier ? '&tier=' + tier : '';
   const r = await fetch(BASE + '/discover/results?sessionId=' + sessionId + q); if (!r.ok) throw new Error('results failed'); return r.json();

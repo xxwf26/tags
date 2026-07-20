@@ -3,6 +3,8 @@ import type { SearchResult } from '../api';
 import { useReferences, useUploadReference, useUpdateReferenceTags, useStartSearch, useSearchSessions, useSearchResults, useReviewSearchResult, usePromoteSearchResult, useRejectSearchResult, useDeleteReference, useTags } from '../hooks';
 import { tagsByTopDim } from '../api';
 const BASE = '/api';
+const SEARCH_REF_KEY = 'search:ref';
+const SEARCH_SESSION_KEY = 'search:session';
 
 const TIER_LABEL: Record<string, { label: string; cls: string }> = {
   tier1: { label: '一级库', cls: 'text-stone-500 bg-stone-100' },
@@ -22,7 +24,10 @@ export function SearchPage() {
   const upload = useUploadReference();
   const updateTags = useUpdateReferenceTags();
   const tagsQ = useTags();
-  const [selectedRef, setSelectedRef] = useState<number | null>(null);
+  // 活动参考图 + session 持久化：切页/刷新后接续后台搜索进程的进度与结果
+  const [selectedRef, setSelectedRef] = useState<number | null>(() => {
+    const v = localStorage.getItem(SEARCH_REF_KEY); return v ? Number(v) : null;
+  });
   const [tagModes, setTagModes] = useState<Record<number, 'must' | 'fuzzy'>>({});
   const [xhsCookie, setXhsCookie] = useState('');
   const [cookieSaved, setCookieSaved] = useState(false);
@@ -33,16 +38,30 @@ export function SearchPage() {
   }, [cookieSaved]);
   const [fuzzyRatio, setFuzzyRatio] = useState(0.5);
   const [platforms, setPlatforms] = useState<Set<string>>(new Set(['xiaohongshu', 'weibo']));
-  const [searching, setSearching] = useState(false);
-  const [activeSession, setActiveSession] = useState<number | null>(null);
-  const [progress, setProgress] = useState<{ total: number; processed: number; startTime: string } | null>(null);
+  const [activeSession, setActiveSession] = useState<number | null>(() => {
+    const v = localStorage.getItem(SEARCH_SESSION_KEY); return v ? Number(v) : null;
+  });
   const [viewResult, setViewResult] = useState<any>(null);
   const [viewImgIdx, setViewImgIdx] = useState(0);
+
+  // 同步到 localStorage（切页恢复用）
+  useEffect(() => {
+    if (selectedRef) localStorage.setItem(SEARCH_REF_KEY, String(selectedRef)); else localStorage.removeItem(SEARCH_REF_KEY);
+  }, [selectedRef]);
+  useEffect(() => {
+    if (activeSession) localStorage.setItem(SEARCH_SESSION_KEY, String(activeSession)); else localStorage.removeItem(SEARCH_SESSION_KEY);
+  }, [activeSession]);
 
   const startSearchM = useStartSearch();
   const sessionsQ = useSearchSessions(selectedRef ?? 0);
   const refetchSessions = sessionsQ.refetch;
-  const resultsQ = useSearchResults(activeSession ?? 0);
+  const sessions = sessionsQ.data ?? [];
+  // 进度/运行态从轮询到的 session 派生（取代旧的本地 searching/progress state + 手写 setInterval）
+  const activeData = sessions.find(s => s.id === activeSession);
+  const running = activeData?.status === 'running';
+  const progress: { total: number; processed: number; startTime: string } | null = (activeData?.searchTags as any)?.progress ?? null;
+  const busy = running || startSearchM.isPending;
+  const resultsQ = useSearchResults(activeSession ?? 0, undefined, running);
   const reviewM = useReviewSearchResult();
   const promoteM = usePromoteSearchResult();
   const rejectM = useRejectSearchResult();
@@ -133,7 +152,6 @@ export function SearchPage() {
 
   const doSearch = async () => {
     if (!selectedRef) return;
-    setSearching(true);
     // 从 tag tree 查 label（不依赖 aiTags，避免乱码/空）
     const allTags: { id: number; label: string; dimensionId: number }[] = [];
     for (const top of (tagsQ.data ?? [])) {
@@ -146,35 +164,13 @@ export function SearchPage() {
       const t = allTags.find(a => a.id === id);
       return { tagId: id, label: t?.label ?? '', dimensionId: t?.dimensionId ?? null, mode: tagModes[id] };
     });
+    // 只记录 activeSession，进度/结果轮询由 useSearchSessions / useSearchResults 的 refetchInterval 接管
+    // （切页/刷新也能接续，不再依赖组件内的 setInterval）
     startSearchM.mutate({ referenceId: selectedRef, tags, platforms: [...platforms], fuzzyRatio }, {
-      onSuccess: (r) => {
-        setActiveSession(r.sessionId);
-        const poll = setInterval(() => {
-          refetchSessions();
-          resultsQ.refetch();
-          fetch(BASE + '/search/sessions?referenceId=' + selectedRef)
-            .then(res => res.json())
-            .then((sessions: any[]) => {
-              const cur = sessions.find(s => s.id === r.sessionId);
-              // 更新进度
-              const p = cur?.searchTags?.progress;
-              if (p) setProgress({ total: p.total, processed: p.processed, startTime: p.startTime });
-              if (cur && cur.status !== 'running') {
-                clearInterval(poll);
-                setSearching(false);
-                setProgress(null);
-                refetchSessions();
-                resultsQ.refetch();
-                setActiveSession(r.sessionId);
-              }
-            });
-        }, 3000);
-      },
-      onError: () => setSearching(false),
+      onSuccess: (r) => { setActiveSession(r.sessionId); refetchSessions(); },
     });
   };
 
-  const sessions = sessionsQ.data ?? [];
   const results = resultsQ.data ?? [];
 
   const saveCookie = () => {
@@ -266,11 +262,11 @@ export function SearchPage() {
                 })}
               </div>
               <div className="flex gap-2 mt-2 flex-wrap items-center">
-                <button onClick={doSearch} disabled={searching}
+                <button onClick={doSearch} disabled={busy}
                   className="text-[12px] bg-xhs text-white rounded-full px-4 py-1.5 font-medium disabled:opacity-50">
-                  {searching ? (progress ? Math.round(progress.processed / progress.total * 100) + '%（' + progress.processed + '/' + progress.total + '）' : '正在搜索小红书帖子…') : '🔍 按标签搜索'}
+                  {busy ? (progress ? Math.round(progress.processed / progress.total * 100) + '%（' + progress.processed + '/' + progress.total + '）' : '正在搜索小红书帖子…') : '🔍 按标签搜索'}
                 </button>
-                {searching && progress && progress.total > 0 && (() => {
+                {running && progress && progress.total > 0 && (() => {
                   const pct = Math.round(progress.processed / progress.total * 100);
                   const elapsed = (Date.now() - new Date(progress.startTime).getTime()) / 1000;
                   const avgPerItem = progress.processed > 0 ? elapsed / progress.processed : 0;
@@ -278,9 +274,9 @@ export function SearchPage() {
                   const etaStr = remaining > 60 ? `~${Math.ceil(remaining / 60)}分钟` : `~${remaining}秒`;
                   return <span className="text-[11px] text-stone-500">{pct}%（{progress.processed}/{progress.total}）· 预计剩余 {etaStr}</span>;
                 })()}
-                {searching && (
+                {running && activeSession && (
                   <button onClick={() => {
-                    fetch(BASE + '/search/abort/' + activeSession, { method: 'POST' }).then(() => { setSearching(false); refetchSessions(); });
+                    fetch(BASE + '/search/abort/' + activeSession, { method: 'POST' }).then(() => refetchSessions());
                   }} className="text-[12px] text-rose-500 border border-rose-300 rounded-full px-3 py-1.5 hover:bg-rose-50">⏹ 终止</button>
                 )}
                 {(refsQ.data ?? []).length > 1 && (

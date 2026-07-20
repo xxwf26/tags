@@ -40,8 +40,18 @@ type Recalled = {
   title: string | null; author: string | null; tags: string[]; allImages: string[];
 };
 
+// 正在运行的发现进程（用于终止）。与 search.service 的 runningSearches 对称：sessionId → aborted?
+const runningDiscovers = new Map<number, boolean>();
+
 @Injectable()
 export class DiscoverService {
+  // 终止发现：置 aborted 标记（runSearch 各阶段检查）+ 立即把 session 标为 failed（前端轮询即收敛）
+  async abort(sessionId: number) {
+    runningDiscovers.set(sessionId, true);
+    await db.update(schema.searchSessions).set({ status: 'failed' }).where(eq(schema.searchSessions.id, sessionId));
+    return { sessionId, aborted: true };
+  }
+
   // 发起搜索：解析关键词（选中标签 / 参考图AI标签）→ 建 session → 立即返回，重活丢后台
   async start(body: { referenceId?: number | null; tags?: { label: string }[]; platforms?: string[] }) {
     const platforms = (body.platforms ?? ['mihuashi']).filter(p => ['xiaohongshu', 'mihuashi', 'weibo'].includes(p));
@@ -88,11 +98,13 @@ export class DiscoverService {
     });
     const sessionId = (sr as any).insertId;
 
+    runningDiscovers.set(sessionId, false);
     this.runSearch(sessionId, { platforms, keywords, mode, referenceId, refEmbedding })
       .catch(async (e) => {
         console.error(`[discover] session ${sessionId} 失败:`, e.message);
         await db.update(schema.searchSessions).set({ status: 'failed' }).where(eq(schema.searchSessions.id, sessionId)).catch(() => {});
-      });
+      })
+      .finally(() => runningDiscovers.delete(sessionId));
 
     return { sessionId, mode };
   }
@@ -103,11 +115,14 @@ export class DiscoverService {
   }) {
     const { platforms, keywords, mode, referenceId, refEmbedding } = ctx;
     const xhsCookie = process.env.XHS_COOKIE || '';
+    const isAborted = () => runningDiscovers.get(sessionId) === true;
 
     // 1) 召回候选池（各平台 × 关键词）
     const pool: Recalled[] = [];
     for (const platform of platforms) {
+      if (isAborted()) break;
       for (const kw of keywords) {
+        if (isAborted()) break;
         try {
           if (platform === 'mihuashi') {
             if (!MIHUASHI_TAGS.has(kw)) { console.error(`[discover] 米画师跳过非官方标签「${kw}」（点不中、只会空跑）`); continue; }
@@ -197,12 +212,14 @@ export class DiscoverService {
     };
 
     for (let i = 0; i < uniq.length; i += CONCURRENCY) {
+      if (isAborted()) { console.log(`[discover] session ${sessionId} 已终止（已处理 ${done}/${uniq.length}）`); break; }
       await Promise.all(uniq.slice(i, i + CONCURRENCY).map(processOne));
     }
 
     stats.kept = kept;
+    // 被终止的：标 failed，不覆盖为 ok。仍写入已完成部分的进度与漏斗，方便复盘。
     await db.update(schema.searchSessions).set({
-      status: 'ok', doneCount: uniq.length, resultCount: kept,
+      status: isAborted() ? 'failed' : 'ok', doneCount: done, resultCount: kept,
       searchTags: { tags: keywords, stats },
     }).where(eq(schema.searchSessions.id, sessionId));
     await logOperation({ type: 'discover_start', targetType: 'reference', targetId: referenceId ?? 0, summary: `发现 #${sessionId}(${mode})：召回 ${uniq.length}，入库 ${kept} 结果` });

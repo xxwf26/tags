@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient, useQueries } from '@tanstack/react-query';
-import { fetchTags, fetchTagsAll, fetchArtworks, fetchArtists, fetchArtist, createArtwork, deleteArtwork, setArtworkTags, updateEngage, tagArtwork, tagBatch, confirmArtwork, searchByImage, createTag, updateTag, deleteTag, createDimension, fetchMihuashiFilterChips, fetchOperations, undoOperation, redoOperation, type Artwork, type Artist, uploadReference, fetchReferences, updateReferenceTags, startSearch, fetchSearchSessions, fetchSearchResults, reviewSearchResult, promoteSearchResult, rejectSearchResult, deleteReference, startDiscover, fetchDiscoverTask, fetchDiscoverResults, fetchDiscoverSessionsList, reviewDiscover, promoteDiscover, rejectDiscover } from './api'
+import { fetchTags, fetchTagsAll, fetchArtworks, fetchArtists, fetchArtist, createArtwork, deleteArtwork, setArtworkTags, updateEngage, tagArtwork, tagBatch, confirmArtwork, searchByImage, createTag, updateTag, deleteTag, createDimension, fetchMihuashiFilterChips, fetchOperations, undoOperation, redoOperation, type Artwork, type Artist, uploadReference, fetchReferences, updateReferenceTags, startSearch, fetchSearchSessions, fetchSearchResults, reviewSearchResult, promoteSearchResult, rejectSearchResult, deleteReference, startDiscover, fetchDiscoverTask, fetchDiscoverResults, fetchDiscoverSessionsList, reviewDiscover, promoteDiscover, rejectDiscover, abortDiscover } from './api'
 
 export function useTags() {
   return useQuery({ queryKey: ['tags'], queryFn: fetchTags });
@@ -119,10 +119,21 @@ export function useStartSearch() {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['search-sessions'] }); qc.invalidateQueries({ queryKey: ['search-results'] }); } });
 }
 export function useSearchSessions(referenceId: number) {
-  return useQuery({ queryKey: ['search-sessions', referenceId], queryFn: () => fetchSearchSessions(referenceId), enabled: !!referenceId });
+  return useQuery({
+    queryKey: ['search-sessions', referenceId],
+    queryFn: () => fetchSearchSessions(referenceId),
+    enabled: !!referenceId,
+    // 有进行中的 session 时轮询，切回页面自动接续进度（取代旧的手写 setInterval）
+    refetchInterval: (q) => (q.state.data?.some((s: any) => s.status === 'running') ? 3000 : false),
+  });
 }
-export function useSearchResults(sessionId: number, tier?: string) {
-  return useQuery({ queryKey: ['search-results', sessionId, tier], queryFn: () => fetchSearchResults(sessionId, tier), enabled: !!sessionId });
+export function useSearchResults(sessionId: number, tier?: string, isRunning?: boolean) {
+  return useQuery({
+    queryKey: ['search-results', sessionId, tier],
+    queryFn: () => fetchSearchResults(sessionId, tier),
+    enabled: !!sessionId,
+    refetchInterval: isRunning ? 3000 : false,
+  });
 }
 export function useReviewSearchResult() {
   const qc = useQueryClient();
@@ -148,6 +159,11 @@ export function useDeleteReference() {
 // ============ 发现（按画风搜作品，独立于寻源） ============
 export function useStartDiscover() {
   return useMutation({ mutationFn: startDiscover });
+}
+export function useAbortDiscover() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (sessionId: number) => abortDiscover(sessionId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['discover-task'] }) });
 }
 export function useDiscoverTask(sessionId: number | null) {
   return useQuery({
