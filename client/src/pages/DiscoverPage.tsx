@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useReferences, useUploadReference, useStartDiscover, useDiscoverTask, useDiscoverResults, useReviewDiscover, usePromoteDiscover, useRejectDiscover, useDeleteReference, useTags } from '../hooks';
-import { tagsByTopDim } from '../api';
+import { useReferences, useUploadReference, useStartDiscover, useDiscoverTask, useDiscoverResults, useReviewDiscover, usePromoteDiscover, useRejectDiscover, useDeleteReference, useMihuashiFilterChips } from '../hooks';
 
 const PLATFORMS = [
   { key: 'mihuashi', label: '米画师' },
@@ -8,11 +7,9 @@ const PLATFORMS = [
   { key: 'xiaohongshu', label: '小红书' },
 ];
 const PLATFORM_LABEL: Record<string, string> = { mihuashi: '米画师', weibo: '微博', xiaohongshu: '小红书' };
-const DIM_ROWS = [
-  { code: 'genre', label: '画风' }, { code: 'subject', label: '题材' },
-  { code: 'technique', label: '技法' }, { code: 'usage', label: '用途' },
-  { code: 'tone', label: '色调' }, { code: 'character', label: '人物' },
-];
+// 米画师 /artworks 页真实可点的筛选 chip，按 category 分组（保证选到的都能在米画师搜到）
+const CAT_ORDER = ['画风', '类型'];
+const CAT_LABEL: Record<string, string> = { '画风': '画风 / 技法', '类型': '作品类别' };
 const TIER_LABEL: Record<string, { label: string; cls: string }> = {
   tier1: { label: '待复核', cls: 'text-stone-500 bg-stone-100' },
   tier2: { label: '已复核', cls: 'text-sky-600 bg-sky-50' },
@@ -23,7 +20,7 @@ const TIER_LABEL: Record<string, { label: string; cls: string }> = {
 export function DiscoverPage() {
   const refsQ = useReferences();
   const upload = useUploadReference();
-  const tagsQ = useTags();
+  const chipsQ = useMihuashiFilterChips();
   const startM = useStartDiscover();
   const reviewM = useReviewDiscover();
   const promoteM = usePromoteDiscover();
@@ -40,16 +37,20 @@ export function DiscoverPage() {
   const taskQ = useDiscoverTask(sessionId);
   const resultsQ = useDiscoverResults(taskQ.data?.status === 'ok' ? (sessionId ?? 0) : 0);
   const ref = (refsQ.data ?? []).find(r => r.id === selectedRef);
-  const byDim = tagsByTopDim(tagsQ.data ?? []);
-  const dimRows = DIM_ROWS.map(d => ({ ...d, tags: byDim.get(d.code)?.tags ?? [] })).filter(d => d.tags.length);
+  // 米画师页面真实 chip，按 category 分组（chip 已是页面真实可点的，无 config 里"平涂"等点不了的）
+  const allChips = chipsQ.data ?? [];
+  const byCat = new Map<string, string[]>();
+  for (const c of allChips) {
+    const arr = byCat.get(c.category) ?? [];
+    arr.push(c.name);
+    byCat.set(c.category, arr);
+  }
+  const catRows = CAT_ORDER.filter(c => byCat.has(c));
 
-  // 上传参考图 → AI 建议标签预勾选（跨全维度）
+  // 上传参考图：仅用于 CLIP 视觉相似度排序（关键词仍来自下方米画师 chip，不预选 AI taxonomy 标签——对不上 chip 会搜不到）
   const loadFile = useCallback((f: File | null) => {
     if (!f) return;
-    upload.mutate(f, { onSuccess: (r) => {
-      setSelectedRef(r.id);
-      setSelectedLabels(new Set((r.aiTags ?? []).map(t => t.label).filter(Boolean)));
-    } });
+    upload.mutate(f, { onSuccess: (r) => setSelectedRef(r.id) });
   }, [upload]);
 
   useEffect(() => {
@@ -113,22 +114,25 @@ export function DiscoverPage() {
           </div>
 
           <div className="flex-1 min-w-0">
-            {/* 全维度标签，按维度分组 */}
-            <div className="text-[12px] text-stone-500 mb-1">画风标签（点击多选，可跨维度组合{upload.isPending ? '，AI 建议中…' : ref ? '，已按参考图预选' : ''}）</div>
+            {/* 米画师页面真实筛选 chip，按 category 分组（选到的都能在米画师搜到） */}
+            <div className="text-[12px] text-stone-500 mb-1">画风标签（点击多选，可跨组组合{chipsQ.isPending ? '，加载中…' : ''}）</div>
             <div className="space-y-1 max-h-40 overflow-auto pr-1">
-              {dimRows.map(row => (
-                <div key={row.code} className="flex items-start gap-2">
-                  <span className="text-[11px] text-stone-400 w-8 shrink-0 pt-0.5">{row.label}</span>
-                  <div className="flex gap-1 flex-wrap">
-                    {row.tags.map(t => {
-                      const on = selectedLabels.has(t.label);
-                      return <span key={t.id} onClick={() => toggleLabel(t.label)}
-                        className={`text-[12px] px-2.5 py-0.5 rounded-full cursor-pointer border ${on ? 'bg-xhs text-white border-xhs' : 'bg-white text-stone-500 border-stone-200 hover:border-xhs'}`}>{t.label}</span>;
-                    })}
+              {catRows.map(cat => {
+                const names = byCat.get(cat) ?? [];
+                return (
+                  <div key={cat} className="flex items-start gap-2">
+                    <span className="text-[11px] text-stone-400 w-16 shrink-0 pt-0.5">{CAT_LABEL[cat] || cat}</span>
+                    <div className="flex gap-1 flex-wrap">
+                      {names.map(name => {
+                        const on = selectedLabels.has(name);
+                        return <span key={name} onClick={() => toggleLabel(name)}
+                          className={`text-[12px] px-2.5 py-0.5 rounded-full cursor-pointer border ${on ? 'bg-xhs text-white border-xhs' : 'bg-white text-stone-500 border-stone-200 hover:border-xhs'}`}>{name}</span>;
+                      })}
+                    </div>
                   </div>
-                </div>
-              ))}
-              {!dimRows.length && <span className="text-[11px] text-stone-400">词表未加载</span>}
+                );
+              })}
+              {!catRows.length && <span className="text-[11px] text-stone-400">{chipsQ.isPending ? '正在拉取米画师筛选标签…' : '标签加载失败，请稍后重试'}</span>}
             </div>
 
             {/* 平台 + 搜索 */}
