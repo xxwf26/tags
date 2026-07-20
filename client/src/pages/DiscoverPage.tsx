@@ -4,7 +4,6 @@ import { useReferences, useUploadReference, useStartDiscover, useDiscoverTask, u
 const PLATFORMS = [
   { key: 'mihuashi', label: '米画师' },
   { key: 'weibo', label: '微博' },
-  { key: 'xiaohongshu', label: '小红书' },
 ];
 const PLATFORM_LABEL: Record<string, string> = { mihuashi: '米画师', weibo: '微博', xiaohongshu: '小红书' };
 // 米画师官方标签（其站内筛选只认这些原词，故直接以它为准；对小红书/微博也通用作关键词）。
