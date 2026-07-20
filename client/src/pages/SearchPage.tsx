@@ -359,7 +359,8 @@ export function SearchPage() {
                 <div key={r.id} className="mb-2.5 break-inside-avoid bg-white rounded-xl overflow-hidden border border-stone-100 card-hover">
                   <div className="relative cursor-pointer" onClick={() => setViewResult(r)}>
                     <img src={r.imageUrl || ''} referrerPolicy="no-referrer" className="w-full object-cover" alt="" style={{ aspectRatio: '3/4' }} onError={e => ((e.target as HTMLImageElement).style.opacity = '0.3')} />
-                    {r.isNew ? <span className="absolute top-2 left-2 text-[10px] px-1.5 py-0.5 rounded bg-xhs text-white">NEW</span> : null}
+                    {(r as any).similarity != null && <span className="absolute top-2 left-2 text-[10px] px-1.5 py-0.5 rounded bg-violet-600 text-white">似 {Math.round((r as any).similarity * 100)}%</span>}
+                    {r.isNew ? <span className="absolute top-2 left-2 text-[10px] px-1.5 py-0.5 rounded bg-xhs text-white" style={{ left: (r as any).similarity != null ? '3.5rem' : '0.5rem' }}>NEW</span> : null}
                     {allImgs.length > 1 && <span className="absolute top-2 right-2 text-[10px] px-1.5 py-0.5 rounded bg-black/50 text-white">📊{allImgs.length}张</span>}
                     <span className="absolute bottom-2 right-2 text-[10px] px-1.5 py-0.5 rounded bg-black/40 text-white">{r.platform}</span>
                   </div>

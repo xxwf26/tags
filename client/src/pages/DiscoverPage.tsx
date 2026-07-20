@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { useMihuashiFilterChips, useStartDiscover, useDiscoverTask, useDiscoverResults, useReviewDiscover, usePromoteDiscover, useRejectDiscover } from '../hooks';
+import { useState, useEffect, useCallback } from 'react';
+import { useMihuashiFilterChips, useStartDiscover, useDiscoverTask, useDiscoverResults, useReviewDiscover, usePromoteDiscover, useRejectDiscover, useReferences, useUploadReference, useDeleteReference } from '../hooks';
 
 const PLATFORM_LABEL: Record<string, string> = { mihuashi: '米画师' };
 // 米画师页面真实筛选 chip 按 category 分组展示
@@ -14,18 +14,23 @@ const TIER_LABEL: Record<string, { label: string; cls: string }> = {
 
 export function DiscoverPage() {
   const chipsQ = useMihuashiFilterChips();
+  const refsQ = useReferences();
+  const upload = useUploadReference();
+  const deleteRef = useDeleteReference();
   const startM = useStartDiscover();
   const reviewM = useReviewDiscover();
   const promoteM = usePromoteDiscover();
   const rejectM = useRejectDiscover();
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selectedRef, setSelectedRef] = useState<number | null>(null);
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [viewResult, setViewResult] = useState<any>(null);
   const [viewIdx, setViewIdx] = useState(0);
 
   const taskQ = useDiscoverTask(sessionId);
   const resultsQ = useDiscoverResults(taskQ.data?.status === 'ok' ? (sessionId ?? 0) : 0);
+  const ref = (refsQ.data ?? []).find(r => r.id === selectedRef);
 
   // 按.category 分组（chip 已是页面真实可点的，无 config 里的"平涂"等点不了的）
   const allChips = chipsQ.data ?? [];
@@ -37,11 +42,28 @@ export function DiscoverPage() {
   }
   const catRows = CAT_ORDER.filter(c => byCat.has(c));
 
+  // 参考图上传（可选）：上传后 image 模式，CLIP 按相似度排序；关键词仍来自下方米画师标签
+  const loadFile = useCallback((f: File | null) => {
+    if (!f) return;
+    upload.mutate(f, { onSuccess: (r) => setSelectedRef(r.id) });
+  }, [upload]);
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      for (const it of e.clipboardData?.items ?? []) {
+        if (it.kind === 'file' && it.type.startsWith('image/')) {
+          const f = it.getAsFile(); if (f) { e.preventDefault(); loadFile(f); break; }
+        }
+      }
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  }, [loadFile]);
+
   const toggle = (name: string) => setSelected(s => { const n = new Set(s); n.has(name) ? n.delete(name) : n.add(name); return n; });
 
   const doSearch = () => {
     if (!selected.size) return;
-    startM.mutate({ tags: [...selected].map(label => ({ label })), platforms: ['mihuashi'] }, { onSuccess: (r) => setSessionId(r.sessionId) });
+    startM.mutate({ referenceId: selectedRef, tags: [...selected].map(label => ({ label })), platforms: ['mihuashi'] }, { onSuccess: (r) => setSessionId(r.sessionId) });
   };
 
   const task = taskQ.data;
@@ -65,6 +87,25 @@ export function DiscoverPage() {
         <h2 className="font-semibold text-stone-800 text-[15px] mb-1">发现 · 按画风搜米画师作品</h2>
         <p className="text-xs text-stone-400 mb-3">选米画师原生画风标签 → 去米画师召回作品 → AI 质检过滤广告/照片/低质 → 复核入库。标签与米画师一致，保证搜得到。</p>
         <div className="flex-1 min-w-0">
+          {/* 参考图（可选）：上传后 image 模式，CLIP 按相似度排序。关键词仍来自下方米画师标签 */}
+          <div className="flex items-center gap-3 mb-2">
+            {ref ? (
+              <div className="relative w-16 h-16 shrink-0">
+                <img src={ref.imageUrl} className="w-16 h-16 object-cover rounded-lg border-2 border-xhs" alt="参考图" />
+                <button onClick={() => setSelectedRef(null)} className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-stone-700 text-white text-xs flex items-center justify-center shadow" title="清除参考图">×</button>
+                <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 text-[9px] bg-violet-600 text-white rounded-full px-1.5 py-0.5 whitespace-nowrap">CLIP相似</span>
+              </div>
+            ) : (
+              <div onClick={() => document.getElementById('discover-ref-file')?.click()}
+                onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); loadFile(e.dataTransfer.files?.[0] ?? null); }}
+                className="w-16 h-16 shrink-0 border-2 border-dashed border-stone-200 rounded-lg flex items-center justify-center text-center cursor-pointer hover:border-xhs">
+                <span className="text-[10px] text-stone-400 px-1 leading-tight">{upload.isPending ? '…' : '📋参考图\n可选'}</span>
+                <input id="discover-ref-file" type="file" accept="image/*" className="hidden" onChange={e => loadFile(e.target.files?.[0] ?? null)} />
+              </div>
+            )}
+            <span className="text-[11px] text-stone-400">可选：上传参考图后按 CLIP 视觉相似度排序结果；搜索关键词仍来自下方米画师标签</span>
+          </div>
+
           {/* 米画师页面真实筛选 chip，按 category 分组 */}
           <div className="text-[12px] text-stone-500 mb-1">画风标签（点击多选，可跨组组合{chipsQ.isPending ? '，加载中…' : ''}）</div>
           <div className="space-y-1 max-h-52 overflow-auto pr-1">
@@ -113,17 +154,40 @@ export function DiscoverPage() {
       )}
       {task && task.status === 'failed' && <div className="text-center text-rose-500 text-sm py-6">搜索失败，请重试</div>}
 
+      {/* 漏斗：让"0 结果/结果少"能看清卡在哪个环节 */}
+      {task && (task.stats || task.status === 'ok') && task.stats && (
+        <div className="bg-white rounded-2xl p-3 border border-stone-100 mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-stone-500">
+          <span>召回 <b className="text-stone-600">{task.stats.recalled}</b></span>
+          <span>· 去重后 {task.stats.unique}</span>
+          {task.stats.dedup > 0 && <span>· 库内重复 -{task.stats.dedup}</span>}
+          {task.stats.downloadFail > 0 && <span>· 下载失败 -{task.stats.downloadFail}</span>}
+          {task.stats.notArtwork > 0 && <span>· 非绘画 -{task.stats.notArtwork}</span>}
+          {task.stats.lowQuality > 0 && <span>· 低质 -{task.stats.lowQuality}</span>}
+          {task.stats.lowSimilarity > 0 && <span>· 画风不符 -{task.stats.lowSimilarity}</span>}
+          <span>· 保留 <b className="text-emerald-600">{task.stats.kept}</b></span>
+          {task.stats.aiSkipped > 0 && <span className="text-amber-600">⚠ {task.stats.aiSkipped} 张未经 AI 质检（未配置 AI_API_KEY 或调用失败），请人工甄别</span>}
+          {task.stats.embedSkipped > 0 && <span className="text-amber-600">⚠ 本次未做视觉精排（CLIP 不可用），仅按质量排序</span>}
+        </div>
+      )}
+
       {/* 结果 */}
       {task?.status === 'ok' && (
         <div>
-          <div className="text-[13px] text-stone-500 mb-2 px-1">按质量分排序 · {results.length} 张（AI 已过滤广告/照片/低质）</div>
-          {!results.length && <div className="text-center text-stone-400 py-12">没有符合质量的结果，换个画风标签试试</div>}
+          <div className="text-[13px] text-stone-500 mb-2 px-1">{task.mode === 'image' && !task.stats?.embedSkipped ? '按画风相似度×质量排序' : '按质量分排序'} · {results.length} 张（AI 已过滤广告/照片/低质）</div>
+          {!results.length && <div className="text-center text-stone-400 py-12">
+            {task.stats && task.stats.recalled === 0
+              ? '平台没搜到内容，换个画风标签试试'
+              : task.stats && task.stats.unique > 0
+              ? '召回的图都被去重或质检过滤了，试试放宽画风'
+              : '没有符合质量的结果，换个画风标签试试'}
+          </div>}
           <div className="masonry columns-2 md:columns-3 lg:columns-4 xl:columns-5 2xl:columns-6">
             {results.map(r => (
               <div key={r.id} className="mb-2.5 break-inside-avoid bg-white rounded-xl overflow-hidden border border-stone-100 card-hover">
                 <div className="relative cursor-zoom-in" onClick={() => { setViewResult(r); setViewIdx(0); }}>
                   <img src={r.imageUrl || ''} referrerPolicy="no-referrer" className="w-full object-cover" style={{ aspectRatio: '3/4' }}
                     onError={e => ((e.target as HTMLImageElement).style.opacity = '0.3')} alt="" />
+                  {r.similarity != null && <span className="absolute top-2 right-2 text-[10px] px-1.5 py-0.5 rounded bg-violet-600/90 text-white" title="与参考图的画风相似度">似 {(r.similarity * 100).toFixed(0)}</span>}
                   {r.quality != null && <span className="absolute top-2 left-2 text-[10px] px-1.5 py-0.5 rounded bg-black/50 text-white">质 {r.quality.toFixed(0)}</span>}
                   <span className="absolute bottom-2 right-2 text-[10px] px-1.5 py-0.5 rounded bg-black/40 text-white">{PLATFORM_LABEL[r.platform] || r.platform}</span>
                 </div>

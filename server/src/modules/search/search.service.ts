@@ -1,5 +1,8 @@
 // 寻源搜索：参考图标签 → 小红书/微博搜索 → 结果存三级库 → 复核 → 正式入库
 // 平台范围：小红书（SSR + 文字预筛 + AI 双模型质检 + 增量写）、微博（关键词搜 + AI 单模型质检）
+// CLIP：参考图 image 模式下给结果算视觉相似度，按相似度排序（worker 不可用则降级为纯质量排序）
+import { readFile } from 'node:fs/promises';
+import { basename, join } from 'node:path';
 import { db, schema } from '../../database/db.js';
 import { eq, and, desc, inArray, isNotNull } from 'drizzle-orm';
 import { searchXhsByKeyword, downloadImage } from '../crawl/xhs.js';
@@ -7,6 +10,7 @@ import { searchWeiboByKeyword } from '../crawl/weibo.js';
 import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
 import { logOperation } from '../operation/op.js';
 import { loadTaxonomy, extractJson, normalizeOutput, callBoth, gateArtwork } from '../tagging/ai.js';
+import { embedImage, cosine, isEmbedAvailable } from '../embed/clip.js';
 import { SettingsService } from '../settings/settings.service.js';
 import { promoteSearchResult } from '../support/promote-helpers.js';
 
@@ -14,6 +18,7 @@ import { promoteSearchResult } from '../support/promote-helpers.js';
 const runningSearches = new Map<number, boolean>(); // sessionId → aborted?
 
 const MIN_QUALITY = 5; // AI 质检质量分下限
+const SIM_FLOOR = 0.2; // CLIP 相似度下限（很宽松，只砍明显不相干）
 
 export class SearchService {
   // 终止搜索
@@ -43,9 +48,22 @@ export class SearchService {
     });
     const sessionId = (sr as any).insertId;
 
+    // CLIP：对参考图算 embedding 存入 session，供结果相似度排序。worker 不可用则跳过（降级纯质量排序）。
+    let refEmbedding: number[] | null = null;
+    if (isEmbedAvailable()) {
+      try {
+        const [ref] = await db.select().from(schema.referenceImages).where(eq(schema.referenceImages.id, body.referenceId));
+        if (ref?.imageUrl) {
+          const refBuf = await readFile(join('uploads', basename(ref.imageUrl)));
+          refEmbedding = await embedImage(refBuf);
+          await db.update(schema.searchSessions).set({ refEmbedding }).where(eq(schema.searchSessions.id, sessionId));
+        }
+      } catch (e: any) { console.error(`[search] 参考图 embedding 失败，降级纯质量排序: ${e.message}`); }
+    }
+
     // 异步执行，不阻塞响应
     runningSearches.set(sessionId, false);
-    this.executeSearch(sessionId, body, prevSession).catch(e => {
+    this.executeSearch(sessionId, body, prevSession, refEmbedding).catch(e => {
       console.error(`[search] session ${sessionId} 失败: ${e.message}`);
       db.update(schema.searchSessions).set({ status: 'failed' }).where(eq(schema.searchSessions.id, sessionId)).then(() => {});
     }).finally(() => {
@@ -55,11 +73,12 @@ export class SearchService {
     return { sessionId, status: 'running' };
   }
 
-  private async executeSearch(sessionId: number, body: any, prevSession: number | null) {
+  private async executeSearch(sessionId: number, body: any, prevSession: number | null, refEmbedding: number[] | null) {
     const isAborted = () => runningSearches.get(sessionId) === true;
     let progressTotal = 0, progressProcessed = 0;
     const progressStart = Date.now();
     const platforms = body.platforms ?? ['xiaohongshu', 'weibo'];
+    const useClip = !!refEmbedding;
     const settingsSvc = new SettingsService();
     const xhsCookie = await settingsSvc.getXhsCookie();
     const fuzzyRatio = body.fuzzyRatio ?? 0.5;
@@ -119,15 +138,16 @@ export class SearchService {
                 let quality = 0;
                 let aiTags: any[] = [];
                 let imageHash: string | null = null;
+                let buf: Buffer | null = null;
                 try {
-                  const { buf } = await downloadImage(n.images[0]);
+                  buf = (await downloadImage(n.images[0])).buf;
                   try { imageHash = await aHash(buf); } catch {}
                   if (imageHash) {
                     if ([...libHashSet].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipDup++; continue; }
                     if ([...sessionHashes].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipDup++; continue; }
                     sessionHashes.add(imageHash);
                   }
-                  const b64 = buf.toString('base64');
+                  const b64 = buf!.toString('base64');
                   const mime = 'image/jpeg';
                   const { gemini } = await callBoth(b64, mime, tax.prompt);
                   const gParsed = extractJson(gemini);
@@ -144,6 +164,13 @@ export class SearchService {
                 }
                 if (!isArtwork) { skipNotArt++; continue; }
                 if (quality < MIN_QUALITY) { skipLowQ++; continue; }
+                // CLIP 相似度（image 模式）：算失败(null)不淘汰，避免误杀；低于下限才丢
+                let similarity: number | null = null;
+                if (useClip && buf) {
+                  try { similarity = cosine(refEmbedding!, await embedImage(buf)); }
+                  catch { similarity = null; }
+                  if (similarity !== null && similarity < SIM_FLOOR) { skipLowQ++; continue; }
+                }
                 kept++;
                 // 增量写入：每筛选完一张立即写 DB
                 const dedupKey = n.sourceUrl || n.images[0] || '';
@@ -157,6 +184,7 @@ export class SearchService {
                   allImages: n.images,
                   aiTags: aiTags.length ? aiTags : null,
                   imageHash: imageHash || null,
+                  similarity,
                   title: n.title || kw,
                   author: n.author || null,
                   tags: n.xhsTags || [],
@@ -190,8 +218,11 @@ export class SearchService {
               let quality = 0;
               let skipped = false;
               let imageHash: string | null = null;
+              let buf: Buffer | null = null;
               try {
-                const { buf, type } = await downloadImage(im.url);
+                const downloaded = await downloadImage(im.url);
+                buf = downloaded.buf;
+                const type = downloaded.type;
                 try { imageHash = await aHash(buf); } catch {}
                 if (imageHash) {
                   if ([...libHashSet].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipDup++; continue; }
@@ -210,6 +241,13 @@ export class SearchService {
                 if (!isArtwork) { skipNotArt++; continue; }
                 if (quality < MIN_QUALITY) { skipLowQ++; continue; }
               }
+              // CLIP 相似度（image 模式）
+              let similarity: number | null = null;
+              if (useClip && buf) {
+                try { similarity = cosine(refEmbedding!, await embedImage(buf)); }
+                catch { similarity = null; }
+                if (!skipped && similarity !== null && similarity < SIM_FLOOR) { skipLowQ++; continue; }
+              }
               kept++;
               const dedupKey = im.url;
               const isNew = !prevUrls.has(dedupKey) && !prevHashes.has(im.url);
@@ -221,6 +259,7 @@ export class SearchService {
                 imageUrl: im.url,
                 allImages: [im.url],
                 imageHash: imageHash || null,
+                similarity,
                 quality: skipped ? null : quality,
                 title: im.title || `微博·${kw}`,
                 author: null,
@@ -279,7 +318,15 @@ export class SearchService {
   async listResults(sessionId: number, tier?: string) {
     const conds = [eq(schema.searchResults.sessionId, sessionId)];
     if (tier) conds.push(eq(schema.searchResults.tier, tier as any));
-    return db.select().from(schema.searchResults).where(and(...conds)).orderBy(desc(schema.searchResults.isNew), desc(schema.searchResults.id));
+    const rows = await db.select().from(schema.searchResults).where(and(...conds));
+    // image 模式（session 有 refEmbedding）按相似度降序(null 安全，null 在后)；否则按 isNew/id
+    const [s] = await db.select().from(schema.searchSessions).where(eq(schema.searchSessions.id, sessionId));
+    if (s?.refEmbedding) {
+      rows.sort((a: any, b: any) => (b.similarity ?? -1) - (a.similarity ?? -1));
+    } else {
+      rows.sort((a: any, b: any) => (b.isNew - a.isNew) || (b.id - a.id));
+    }
+    return rows;
   }
 
   // 复核：tier1 → tier2

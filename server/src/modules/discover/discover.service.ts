@@ -1,6 +1,9 @@
-// 发现（按画风搜作品）：选米画师原生画风标签 → 米画师召回 → 逐张(去重+AI质检) → 按质量排序
+// 发现（按画风搜作品）：选米画师原生画风标签 → 米画师召回 → 逐张(去重+AI质检) → 排序
 // → 复核 → 正式入库。异步执行：start 立即返回 sessionId，runSearch 后台跑并写进度。
 // 平台范围：仅米画师（小红书/微博归寻源）。关键词必须用米画师原生标签，避免词表不一致导致 0 结果。
+// 可选参考图：上传后 image 模式，用 CLIP 算与参考图的相似度排序（关键词仍来自米画师标签）。
+import { readFile } from 'node:fs/promises';
+import { basename, join } from 'node:path';
 import { db, schema } from '../../database/db.js';
 import { eq, and, desc, isNotNull } from 'drizzle-orm';
 import { searchMihuashi } from '../crawl/mihuashi.js';
@@ -8,11 +11,13 @@ import { downloadImage } from '../crawl/xhs.js';
 import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
 import { logOperation } from '../operation/op.js';
 import { gateArtwork } from '../tagging/ai.js';
+import { embedImage, cosine, isEmbedAvailable } from '../embed/clip.js';
 import { promoteSearchResult } from '../support/promote-helpers.js';
 
 const PER_KW = 20;          // 每关键词召回上限
 const CONCURRENCY = 6;      // 逐张处理并发度
 const MIN_QUALITY = 5;      // AI 质检质量分下限
+const SIM_FLOOR = 0.2;      // CLIP 相似度下限（image 模式，很宽松）
 
 type Recalled = {
   platform: string; imageUrl: string; sourceUrl: string | null;
@@ -21,32 +26,47 @@ type Recalled = {
 
 export class DiscoverService {
   // 发起搜索：关键词=传入的米画师原生标签 → 建 session → 立即返回，重活丢后台
-  async start(body: { tags?: { label: string }[]; platforms?: string[] }) {
+  // 可选 referenceId：上传参考图后 image 模式，CLIP 算相似度排序（关键词仍来自米画师标签）
+  async start(body: { referenceId?: number | null; tags?: { label: string }[]; platforms?: string[] }) {
     const platforms = ['mihuashi']; // 发现只走米画师
 
     // 关键词：用户选中的米画师原生标签（必须传）
     const keywords = (body.tags ?? []).map(t => String(t.label).trim()).filter(Boolean);
     if (!keywords.length) throw new Error('请选择米画师画风标签作为搜索关键词');
 
+    // 可选参考图 → CLIP embedding（worker 不可用则降级 tags 模式）
+    const referenceId = body.referenceId ?? null;
+    let refEmbedding: number[] | null = null;
+    const mode: 'image' | 'tags' = referenceId ? 'image' : 'tags';
+    if (referenceId && isEmbedAvailable()) {
+      try {
+        const [ref] = await db.select().from(schema.referenceImages).where(eq(schema.referenceImages.id, referenceId));
+        if (ref?.imageUrl) {
+          refEmbedding = await embedImage(await readFile(join(process.cwd(), 'uploads', basename(ref.imageUrl))));
+        }
+      } catch (e: any) { console.error(`[discover] 参考图 embedding 失败，降级 tags 模式: ${e.message}`); }
+    }
+    const useClip = mode === 'image' && !!refEmbedding;
+
     const [sr] = await db.insert(schema.searchSessions).values({
-      referenceImageId: null, mode: 'tags',
-      searchTags: { tags: keywords }, platforms,
+      referenceImageId: referenceId, mode: useClip ? 'image' : 'tags',
+      refEmbedding, searchTags: { tags: keywords }, platforms,
       status: 'running', doneCount: 0, totalCount: 0,
     });
     const sessionId = (sr as any).insertId;
 
-    this.runSearch(sessionId, { keywords })
+    this.runSearch(sessionId, { keywords, referenceId, useClip, refEmbedding })
       .catch(async (e) => {
         console.error(`[discover] session ${sessionId} 失败:`, e.message);
         await db.update(schema.searchSessions).set({ status: 'failed' }).where(eq(schema.searchSessions.id, sessionId)).catch(() => {});
       });
 
-    return { sessionId, mode: 'tags' as const };
+    return { sessionId, mode: useClip ? ('image' as const) : ('tags' as const) };
   }
 
   // 后台：召回 → 逐张处理 → 写结果 + 进度
-  private async runSearch(sessionId: number, ctx: { keywords: string[] }) {
-    const { keywords } = ctx;
+  private async runSearch(sessionId: number, ctx: { keywords: string[]; referenceId: number | null; useClip: boolean; refEmbedding: number[] | null }) {
+    const { keywords, referenceId, useClip, refEmbedding } = ctx;
 
     // 1) 召回候选池（米画师 × 关键词）
     const pool: Recalled[] = [];
@@ -67,6 +87,12 @@ export class DiscoverService {
       .from(schema.artworks).where(isNotNull(schema.artworks.imageHash))).map(a => a.hash).filter(Boolean) as string[];
     const seenHash: string[] = [...libHashes];
     let done = 0, kept = 0;
+    // 漏斗统计：让"0 结果/结果少"能看清卡在哪个环节
+    const stats = {
+      recalled: pool.length, unique: uniq.length, dedup: 0, downloadFail: 0,
+      notArtwork: 0, lowQuality: 0, lowSimilarity: 0, kept: 0,
+      aiSkipped: 0, embedSkipped: useClip ? 0 : (referenceId ? 1 : 0), embedFail: 0,
+    };
 
     // 2) 逐张处理（分批并发）：下载 → 去重 → AI质检 → 写结果
     const processOne = async (r: Recalled) => {
@@ -74,34 +100,44 @@ export class DiscoverService {
         const { buf, type } = await downloadImage(r.imageUrl);
         let hash: string | null = null;
         try { hash = await aHash(buf); } catch {}
-        if (hash && seenHash.some(h => hamming(hash!, h) <= DEDUP_THRESHOLD)) return; // 去重
+        if (hash && seenHash.some(h => hamming(hash!, h) <= DEDUP_THRESHOLD)) { stats.dedup++; return; } // 去重
         if (hash) seenHash.push(hash);
         // AI 质检闸门（单模型，省成本）：过滤广告/照片/文字海报/低质
         const gate = await gateArtwork(buf.toString('base64'), type);
+        // CLIP 相似度（image 模式）：算失败(null)不淘汰；低于下限才丢（skipped 未质检的不用相似度卡）
+        let similarity: number | null = null;
+        if (useClip) {
+          try { similarity = cosine(refEmbedding!, await embedImage(buf)); }
+          catch { similarity = null; stats.embedFail++; }
+          if (!gate.skipped && similarity !== null && similarity < SIM_FLOOR) { stats.lowSimilarity++; return; }
+        }
         // AI 没真正质检（无 key / 调用失败）：不伪装成通过，入库但 quality=null 标"未质检"，交人工复核
         if (gate.skipped) {
+          stats.aiSkipped++;
           await db.insert(schema.searchResults).values({
-            sessionId, referenceImageId: null, platform: r.platform,
+            sessionId, referenceImageId: referenceId, platform: r.platform,
             sourceUrl: r.sourceUrl, imageUrl: r.imageUrl, title: r.title, author: r.author, authorUrl: r.authorUrl,
             tags: r.tags, allImages: r.allImages, imageHash: hash,
-            similarity: null, quality: null, isNew: 1, tier: 'tier1',
+            similarity, quality: null, isNew: 1, tier: 'tier1',
           });
           kept++;
           return;
         }
-        if (!gate.isArtwork || gate.quality < MIN_QUALITY) return;
+        if (!gate.isArtwork) { stats.notArtwork++; return; }
+        if (gate.quality < MIN_QUALITY) { stats.lowQuality++; return; }
         await db.insert(schema.searchResults).values({
-          sessionId, referenceImageId: null, platform: r.platform,
+          sessionId, referenceImageId: referenceId, platform: r.platform,
           sourceUrl: r.sourceUrl, imageUrl: r.imageUrl, title: r.title, author: r.author, authorUrl: r.authorUrl,
           tags: r.tags, allImages: r.allImages, imageHash: hash,
-          similarity: null, quality: gate.quality, isNew: 1, tier: 'tier1',
+          similarity, quality: gate.quality, isNew: 1, tier: 'tier1',
         });
         kept++;
       } catch (e: any) {
+        stats.downloadFail++;
         console.error(`[discover] 处理失败 ${r.imageUrl?.slice(0, 50)}: ${e.message}`);
       } finally {
         done++;
-        if (done % 3 === 0 || done === uniq.length) await db.update(schema.searchSessions).set({ doneCount: done }).where(eq(schema.searchSessions.id, sessionId)).catch(() => {});
+        if (done % 3 === 0 || done === uniq.length) await db.update(schema.searchSessions).set({ doneCount: done, searchTags: { tags: keywords, stats } }).where(eq(schema.searchSessions.id, sessionId)).catch(() => {});
       }
     };
 
@@ -109,22 +145,31 @@ export class DiscoverService {
       await Promise.all(uniq.slice(i, i + CONCURRENCY).map(processOne));
     }
 
-    await db.update(schema.searchSessions).set({ status: 'ok', doneCount: uniq.length, resultCount: kept }).where(eq(schema.searchSessions.id, sessionId));
-    await logOperation({ type: 'discover_start', targetType: 'reference', targetId: 0, summary: `发现 #${sessionId}(tags)：召回 ${uniq.length}，入库 ${kept} 结果` });
+    stats.kept = kept;
+    await db.update(schema.searchSessions).set({ status: 'ok', doneCount: uniq.length, resultCount: kept, searchTags: { tags: keywords, stats } }).where(eq(schema.searchSessions.id, sessionId));
+    await logOperation({ type: 'discover_start', targetType: 'reference', targetId: 0, summary: `发现 #${sessionId}(${useClip ? 'image' : 'tags'})：召回 ${uniq.length}，入库 ${kept} 结果` });
   }
 
-  // 任务进度
+  // 任务进度（含漏斗统计）
   async taskStatus(sessionId: number) {
     const [s] = await db.select().from(schema.searchSessions).where(eq(schema.searchSessions.id, sessionId));
     if (!s) throw new Error('会话不存在');
-    return { status: s.status, done: s.doneCount ?? 0, total: s.totalCount ?? 0, resultCount: s.resultCount ?? 0, mode: s.mode };
+    const stats = (s.searchTags as any)?.stats ?? null;
+    return { status: s.status, done: s.doneCount ?? 0, total: s.totalCount ?? 0, resultCount: s.resultCount ?? 0, mode: s.mode, stats };
   }
 
-  // 结果列表：按质量分降序
+  // 结果列表：image 模式按相似度降序(null 安全)；tags 模式按质量降序
   async listResults(sessionId: number, tier?: string) {
     const conds = [eq(schema.searchResults.sessionId, sessionId)];
     if (tier) conds.push(eq(schema.searchResults.tier, tier as any));
-    return db.select().from(schema.searchResults).where(and(...conds)).orderBy(desc(schema.searchResults.quality), desc(schema.searchResults.id));
+    const rows = await db.select().from(schema.searchResults).where(and(...conds));
+    const [s] = await db.select().from(schema.searchSessions).where(eq(schema.searchSessions.id, sessionId));
+    if (s?.refEmbedding) {
+      rows.sort((a: any, b: any) => (b.similarity ?? -1) - (a.similarity ?? -1));
+    } else {
+      rows.sort((a: any, b: any) => (b.quality ?? -1) - (a.quality ?? -1) || (b.id - a.id));
+    }
+    return rows;
   }
 
   // 复核：tier1 → tier2

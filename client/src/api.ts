@@ -226,10 +226,10 @@ export async function fetchReferenceDetail(id: number) {
 export type DiscoverResult = {
   id: number; sessionId: number; platform: string;
   sourceUrl: string | null; imageUrl: string | null; title: string | null; author: string | null;
-  tags: string[]; allImages: string[] | null; imageHash: string | null; quality: number | null;
+  tags: string[]; allImages: string[] | null; imageHash: string | null; quality: number | null; similarity: number | null;
   tier: 'tier1' | 'tier2' | 'promoted' | 'rejected'; promotedArtworkId: number | null; createdAt: string;
 };
-export type DiscoverTask = { status: string; done: number; total: number; resultCount: number; mode: 'image' | 'tags' };
+export type DiscoverTask = { status: string; done: number; total: number; resultCount: number; mode: 'image' | 'tags'; stats?: any };
 // 发起发现：referenceId(可选) + tags(可选 [{label}]) + platforms
 export async function startDiscover(body: { referenceId?: number | null; tags?: { label: string }[]; platforms?: string[] }): Promise<{ sessionId: number; mode: 'image' | 'tags' }> {
   const r = await fetch(BASE + '/discover/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
