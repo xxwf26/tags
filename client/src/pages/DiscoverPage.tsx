@@ -180,6 +180,10 @@ export function DiscoverPage() {
                 {startM.isPending ? '发起中…' : anyRunning ? '🔍 再发起一个（并行）' : (selectedRef ? '🔍 按识别的画风搜' : '🔍 按标签搜作品')}
               </button>
             </div>
+            {/* 米画师限流提示 */}
+            <div className="mt-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
+              ⚠ 米画师反爬限流：短时间连搜多个标签会被挡（返回0结果）。建议一次搜1-2个标签，两次搜索间隔1-2分钟，别一次性狂搜。
+            </div>
           </div>
         </div>
       </div>
@@ -237,12 +241,12 @@ export function DiscoverPage() {
           )}
           <div className="text-[13px] text-stone-500 mb-2 px-1">{activeTask.mode === 'image' && !activeTask.stats?.embedSkipped ? '按画风相似度×质量排序' : '按质量分排序'} · {results.length} 张（AI 已过滤广告/照片/低质）</div>
           {!results.length && (
-            <div className="text-center text-stone-400 py-12">
+            <div className="text-center py-12">
               {activeTask.stats && activeTask.stats.recalled === 0
-                ? '平台没搜到内容，换个画风关键词或平台试试'
+                ? <div className="text-amber-600 text-sm">⚠ 召回0张——可能被米画师限流了（短时间搜太多）。请等 1-2 分钟再试，别一次性连搜多个标签。</div>
                 : activeTask.stats && activeTask.stats.unique > 0
-                ? '召回的图都被去重或质检过滤了，试试放宽画风或换平台'
-                : '没有符合质量的结果，换个画风或平台试试'}
+                ? <div className="text-stone-400 text-sm">召回的图都被去重或质检过滤了，试试放宽画风或换平台</div>
+                : <div className="text-stone-400 text-sm">没有符合质量的结果，换个画风或平台试试</div>}
             </div>
           )}
           <div className="masonry columns-2 md:columns-3 lg:columns-4 xl:columns-5 2xl:columns-6">
