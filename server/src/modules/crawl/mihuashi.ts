@@ -50,32 +50,49 @@ async function stealthContext(b: Browser): Promise<BrowserContext> {
   return ctx;
 }
 
+// 串行锁：米画师搜索共享浏览器实例 + 反爬，并发会互相挤掉导致都 0 结果。
+// 多个发现 session 并行寻源时，米画师搜索在此排队（一次一个），微博/小红书不受影响仍并发。
+let _mhsLock: Promise<unknown> = Promise.resolve();
+function withMhsLock<T>(fn: () => Promise<T>): Promise<T> {
+  const next = _mhsLock.then(fn, fn);
+  _mhsLock = next.then(() => undefined, () => undefined);
+  return next as Promise<T>;
+}
+
 export async function searchMihuashi(tagName: string, limit = 30): Promise<MhsArtwork[]> {
+  // 串行 + 冷启动重试：第一个调用（冷浏览器）偶发被反爬挡返回 0，重试一次（热浏览器）即可
+  let arts = await withMhsLock(() => _searchMihuashi(tagName, limit));
+  if (!arts.length) arts = await withMhsLock(() => _searchMihuashi(tagName, limit));
+  return arts;
+}
+
+async function _searchMihuashi(tagName: string, limit = 30): Promise<MhsArtwork[]> {
   // 把标签名转成 tag id，直接用 ?tags={id} 导航（画风/类型标签统一走这条路，不再点 DOM）
   const idMap = await getTagIdMap();
   const tagId = idMap.get(tagName);
   if (!tagId) { console.error(`[mihuashi] 未知标签「${tagName}」（不在米画师 43 个官方标签内）`); return []; }
 
-  const b = await getBrowser();
-  const ctx = await stealthContext(b);
-  const p = await ctx.newPage();
+  let ctx: BrowserContext | null = null;
   const arts: MhsArtwork[] = [];
   const seen = new Set<number>();
-  p.on('response', async r => {
-    if (r.url().includes('/api/v1/artworks/search')) {
-      try {
-        const j = JSON.parse(await r.text());
-        for (const a of j.artworks || []) {
-          if (a.id && !seen.has(a.id)) {
-            seen.add(a.id);
-            const { author, authorUrl } = extractAuthor(a);
-            arts.push({ mhsId: a.id, imageUrl: a.url, width: a.width ?? null, height: a.height ?? null, author, authorUrl });
-          }
-        }
-      } catch {}
-    }
-  });
   try {
+    const b = await getBrowser();
+    ctx = await stealthContext(b);
+    const p = await ctx.newPage();
+    p.on('response', async r => {
+      if (r.url().includes('/api/v1/artworks/search')) {
+        try {
+          const j = JSON.parse(await r.text());
+          for (const a of j.artworks || []) {
+            if (a.id && !seen.has(a.id)) {
+              seen.add(a.id);
+              const { author, authorUrl } = extractAuthor(a);
+              arts.push({ mhsId: a.id, imageUrl: a.url, width: a.width ?? null, height: a.height ?? null, author, authorUrl });
+            }
+          }
+        } catch {}
+      }
+    });
     // 带标签直接进筛选后的列表页；order=1 最新，tags={id} 指定画风/类型
     await p.goto(`https://www.mihuashi.com/artworks?order=1&tags=${tagId}`, { waitUntil: 'networkidle', timeout: 45000 });
     await p.waitForTimeout(2000);
@@ -83,29 +100,35 @@ export async function searchMihuashi(tagName: string, limit = 30): Promise<MhsAr
       await p.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
       await p.waitForTimeout(1500);
     }
-  } catch (e) {
-    // 超时/导航异常也返回已收集的
+  } catch (e: any) {
+    // 浏览器断开/超时/导航异常：返回已收集的，不抛（避免拖垮进程）
+    console.error(`[mihuashi] "${tagName}" 搜索异常: ${e.message}`);
   } finally {
-    await ctx.close();
+    if (ctx) try { await ctx.close(); } catch {}
   }
   return arts.slice(0, limit);
 }
 
 // 拉米画师可用画风标签（供前端下拉）
 export async function fetchMihuashiTags(): Promise<{ id: number; name: string; type: string }[]> {
-  const b = await getBrowser();
-  const ctx = await stealthContext(b);
-  const p = await ctx.newPage();
+  let ctx: BrowserContext | null = null;
   let tags: any[] = [];
-  p.on('response', async r => {
-    if (r.url().includes('/api/v1/configure/artwork_tags')) {
-      try { const j = JSON.parse(await r.text()); tags = j.artwork_tags || []; } catch {}
-    }
-  });
   try {
+    const b = await getBrowser();
+    ctx = await stealthContext(b);
+    const p = await ctx.newPage();
+    p.on('response', async r => {
+      if (r.url().includes('/api/v1/configure/artwork_tags')) {
+        try { const j = JSON.parse(await r.text()); tags = j.artwork_tags || []; } catch {}
+      }
+    });
     await p.goto('https://www.mihuashi.com/artworks?order=1', { waitUntil: 'networkidle', timeout: 45000 });
     await p.waitForTimeout(1500);
-  } finally { await ctx.close(); }
+  } catch (e: any) {
+    console.error(`[mihuashi] 拉标签异常: ${e.message}`);
+  } finally {
+    if (ctx) try { await ctx.close(); } catch {}
+  }
   return tags;
 }
 

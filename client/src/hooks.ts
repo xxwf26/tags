@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, useQueries } from '@tanstack/react-query';
 import { fetchTags, fetchTagsAll, fetchArtworks, fetchArtists, fetchArtist, createArtwork, deleteArtwork, setArtworkTags, updateEngage, tagArtwork, tagBatch, confirmArtwork, searchByImage, createTag, updateTag, deleteTag, createDimension, fetchMihuashiFilterChips, fetchOperations, undoOperation, redoOperation, type Artwork, type Artist, uploadReference, fetchReferences, updateReferenceTags, startSearch, fetchSearchSessions, fetchSearchResults, reviewSearchResult, promoteSearchResult, rejectSearchResult, deleteReference, startDiscover, fetchDiscoverTask, fetchDiscoverResults, reviewDiscover, promoteDiscover, rejectDiscover } from './api'
 
 export function useTags() {
@@ -155,6 +155,17 @@ export function useDiscoverTask(sessionId: number | null) {
     queryFn: () => fetchDiscoverTask(sessionId!),
     enabled: !!sessionId,
     refetchInterval: (q) => (q.state.data && q.state.data.status === 'running' ? 1500 : false),
+  });
+}
+// 并行轮询多个发现 session 的任务状态（支持多版本并行寻源）。running 的每 1.5s 刷新，完成的停。
+export function useDiscoverSessions(ids: number[]) {
+  return useQueries({
+    queries: ids.map(id => ({
+      queryKey: ['discover-task', id],
+      queryFn: () => fetchDiscoverTask(id),
+      enabled: !!id,
+      refetchInterval: (q: any) => (q.state.data && q.state.data.status === 'running' ? 2000 : false),
+    })),
   });
 }
 export function useDiscoverResults(sessionId: number, tier?: string) {
