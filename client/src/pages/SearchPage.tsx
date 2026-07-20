@@ -32,6 +32,7 @@ export function SearchPage() {
     fetch(BASE + '/settings/xhs-cookie').then(res => res.json()).then(setCookieStatus);
   }, [cookieSaved]);
   const [fuzzyRatio, setFuzzyRatio] = useState(0.5);
+  const [platforms, setPlatforms] = useState<Set<string>>(new Set(['xiaohongshu', 'weibo']));
   const [searching, setSearching] = useState(false);
   const [activeSession, setActiveSession] = useState<number | null>(null);
   const [progress, setProgress] = useState<{ total: number; processed: number; startTime: string } | null>(null);
@@ -126,6 +127,8 @@ export function SearchPage() {
     setTagModes(m);
   };
   const selectedIds = Object.keys(tagModes).map(Number);
+  const togglePlatform = (k: string) => setPlatforms(s => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); if (!n.size) n.add(k); return n; });
+  const PLATFORM_OPTS = [{ key: 'xiaohongshu', label: '小红书' }, { key: 'weibo', label: '微博' }];
   const saveTags = () => { if (selectedRef) updateTags.mutate({ id: selectedRef, manualTags: selectedIds.map(id => { const t = (ref?.aiTags ?? []).find(a => a.tagId === id); return { tagId: id, label: t?.label ?? '', dimensionId: t?.dimensionId ?? null }; }) }); };
 
   const doSearch = async () => {
@@ -143,7 +146,7 @@ export function SearchPage() {
       const t = allTags.find(a => a.id === id);
       return { tagId: id, label: t?.label ?? '', dimensionId: t?.dimensionId ?? null, mode: tagModes[id] };
     });
-    startSearchM.mutate({ referenceId: selectedRef, tags, platforms: ['xiaohongshu'], fuzzyRatio }, {
+    startSearchM.mutate({ referenceId: selectedRef, tags, platforms: [...platforms], fuzzyRatio }, {
       onSuccess: (r) => {
         setActiveSession(r.sessionId);
         const poll = setInterval(() => {
@@ -253,6 +256,15 @@ export function SearchPage() {
                 <input type="range" min="0" max="100" value={Math.round(fuzzyRatio * 100)} onChange={e => setFuzzyRatio(Number(e.target.value) / 100)} className="w-32 accent-xhs" />
                 <span className="text-xhs font-medium">{Math.round(fuzzyRatio * 100)}%</span>
               </div>
+              {/* 平台选择 */}
+              <div className="flex items-center gap-2 mt-2 text-[11px] text-stone-500">
+                <span>采集平台：</span>
+                {PLATFORM_OPTS.map(p => {
+                  const on = platforms.has(p.key);
+                  return <span key={p.key} onClick={() => togglePlatform(p.key)}
+                    className={`px-2.5 py-0.5 rounded-full cursor-pointer border ${on ? 'bg-xhs text-white border-xhs' : 'bg-white text-stone-500 border-stone-200'}`}>{p.label}</span>;
+                })}
+              </div>
               <div className="flex gap-2 mt-2 flex-wrap items-center">
                 <button onClick={doSearch} disabled={searching}
                   className="text-[12px] bg-xhs text-white rounded-full px-4 py-1.5 font-medium disabled:opacity-50">
@@ -347,7 +359,8 @@ export function SearchPage() {
                 <div key={r.id} className="mb-2.5 break-inside-avoid bg-white rounded-xl overflow-hidden border border-stone-100 card-hover">
                   <div className="relative cursor-pointer" onClick={() => setViewResult(r)}>
                     <img src={r.imageUrl || ''} referrerPolicy="no-referrer" className="w-full object-cover" alt="" style={{ aspectRatio: '3/4' }} onError={e => ((e.target as HTMLImageElement).style.opacity = '0.3')} />
-                    {r.isNew ? <span className="absolute top-2 left-2 text-[10px] px-1.5 py-0.5 rounded bg-xhs text-white">NEW</span> : null}
+                    {(r as any).similarity != null && <span className="absolute top-2 left-2 text-[10px] px-1.5 py-0.5 rounded bg-violet-600 text-white">似 {Math.round((r as any).similarity * 100)}%</span>}
+                    {r.isNew ? <span className="absolute top-2 left-2 text-[10px] px-1.5 py-0.5 rounded bg-xhs text-white" style={{ left: (r as any).similarity != null ? '3.5rem' : '0.5rem' }}>NEW</span> : null}
                     {allImgs.length > 1 && <span className="absolute top-2 right-2 text-[10px] px-1.5 py-0.5 rounded bg-black/50 text-white">📊{allImgs.length}张</span>}
                     <span className="absolute bottom-2 right-2 text-[10px] px-1.5 py-0.5 rounded bg-black/40 text-white">{r.platform}</span>
                   </div>

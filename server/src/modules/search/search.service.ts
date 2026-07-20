@@ -1,23 +1,25 @@
-// 寻源搜索：参考图标签 → 多平台搜索 → 结果存三级库 → 复核 → 正式入库
-import { writeFile, mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+// 寻源搜索：参考图标签 → 小红书/微博搜索 → 结果存三级库 → 复核 → 正式入库
+// 平台范围：小红书（SSR + 文字预筛 + AI 双模型质检 + 增量写）、微博（关键词搜 + AI 单模型质检）
+// CLIP：参考图 image 模式下给结果算视觉相似度，按相似度排序（worker 不可用则降级为纯质量排序）
+import { readFile } from 'node:fs/promises';
+import { basename, join } from 'node:path';
 import { db, schema } from '../../database/db.js';
 import { eq, and, desc, inArray, isNotNull } from 'drizzle-orm';
-import { searchMihuashi } from '../crawl/mihuashi.js';
 import { searchXhsByKeyword, downloadImage } from '../crawl/xhs.js';
 import { searchWeiboByKeyword } from '../crawl/weibo.js';
-import { searchBaiduImages } from '../crawl/baidu.js';
 import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
 import { logOperation } from '../operation/op.js';
-import { loadTaxonomy, extractJson, normalizeOutput, callBoth } from '../tagging/ai.js';
+import { loadTaxonomy, extractJson, normalizeOutput, callBoth, gateArtwork } from '../tagging/ai.js';
+import { embedImage, cosine, isEmbedAvailable } from '../embed/clip.js';
 import { SettingsService } from '../settings/settings.service.js';
-import { findDuplicateArtwork, findOrCreateArtist } from '../discover/promote-helpers.js';
-import { Injectable } from '@nestjs/common';
+import { promoteSearchResult } from '../support/promote-helpers.js';
 
 // 正在运行的搜索进程（用于终止）
 const runningSearches = new Map<number, boolean>(); // sessionId → aborted?
 
-@Injectable()
+const MIN_QUALITY = 5; // AI 质检质量分下限
+const SIM_FLOOR = 0.2; // CLIP 相似度下限（很宽松，只砍明显不相干）
+
 export class SearchService {
   // 终止搜索
   async abort(sessionId: number) {
@@ -41,14 +43,27 @@ export class SearchService {
       referenceImageId: body.referenceId,
       parentSessionId: prevSession,
       searchTags: { tags: body.tags, fuzzyRatio: body.fuzzyRatio ?? 0.5 },
-      platforms: body.platforms ?? ['xiaohongshu'],
+      platforms: body.platforms ?? ['xiaohongshu', 'weibo'],
       status: 'running',
     });
     const sessionId = (sr as any).insertId;
 
+    // CLIP：对参考图算 embedding 存入 session，供结果相似度排序。worker 不可用则跳过（降级纯质量排序）。
+    let refEmbedding: number[] | null = null;
+    if (isEmbedAvailable()) {
+      try {
+        const [ref] = await db.select().from(schema.referenceImages).where(eq(schema.referenceImages.id, body.referenceId));
+        if (ref?.imageUrl) {
+          const refBuf = await readFile(join('uploads', basename(ref.imageUrl)));
+          refEmbedding = await embedImage(refBuf);
+          await db.update(schema.searchSessions).set({ refEmbedding }).where(eq(schema.searchSessions.id, sessionId));
+        }
+      } catch (e: any) { console.error(`[search] 参考图 embedding 失败，降级纯质量排序: ${e.message}`); }
+    }
+
     // 异步执行，不阻塞响应
     runningSearches.set(sessionId, false);
-    this.executeSearch(sessionId, body, prevSession).catch(e => {
+    this.executeSearch(sessionId, body, prevSession, refEmbedding).catch(e => {
       console.error(`[search] session ${sessionId} 失败: ${e.message}`);
       db.update(schema.searchSessions).set({ status: 'failed' }).where(eq(schema.searchSessions.id, sessionId)).then(() => {});
     }).finally(() => {
@@ -58,19 +73,15 @@ export class SearchService {
     return { sessionId, status: 'running' };
   }
 
-  private async executeSearch(sessionId: number, body: any, prevSession: number | null) {
+  private async executeSearch(sessionId: number, body: any, prevSession: number | null, refEmbedding: number[] | null) {
     const isAborted = () => runningSearches.get(sessionId) === true;
     let progressTotal = 0, progressProcessed = 0;
     const progressStart = Date.now();
-    const platforms = body.platforms ?? ['xiaohongshu'];
+    const platforms = body.platforms ?? ['xiaohongshu', 'weibo'];
+    const useClip = !!refEmbedding;
     const settingsSvc = new SettingsService();
     const xhsCookie = await settingsSvc.getXhsCookie();
     const fuzzyRatio = body.fuzzyRatio ?? 0.5;
-
-    // 防重复：同一参考图已有进行中的搜索则拒绝，避免并发多任务打爆平台反爬
-    const [running] = await db.select({ id: schema.searchSessions.id }).from(schema.searchSessions)
-      .where(and(eq(schema.searchSessions.referenceImageId, body.referenceId), eq(schema.searchSessions.status, 'running'))).limit(1);
-    if (running) throw new Error('该参考图正在搜索中，请等待完成');
 
     // 加载维度表，解析每个标签的顶层 code（genre/technique/...）
     const dims = await db.select().from(schema.tagDimensions);
@@ -82,62 +93,32 @@ export class SearchService {
       return d?.code ?? '';
     };
 
-    // 必中的 genre 画风标签 → 米画师搜索关键词
+    // 必中的 genre 画风标签 → 搜索关键词；没有必中 genre 则用所有 genre 标签
     const mustGenreTags = body.tags.filter((t: any) => t.mode === 'must' && rootCodeOf(t.dimensionId) === 'genre');
-    // 如果没有必中 genre，退而用所有 genre 标签（含模糊）
     const allGenreTags = body.tags.filter((t: any) => rootCodeOf(t.dimensionId) === 'genre');
     const searchKeywords = (mustGenreTags.length ? mustGenreTags : allGenreTags).map((t: any) => t.label);
 
-    // 取上一次的结果（用于 isNew 判断）—— prevSession 从参数传入
+    // 取上一次的结果（用于 isNew 判断）
     const prevResults = prevSession ? await db.select().from(schema.searchResults)
       .where(eq(schema.searchResults.sessionId, prevSession)) : [];
     const prevHashes = new Set(prevResults.map(r => r.imageHash).filter(Boolean));
     const prevUrls = new Set(prevResults.map(r => r.sourceUrl).filter(Boolean));
 
+    // 共享去重集合：库内已有 hash + 本 session 已收集 hash
+    const libHashes = (await db.select({ hash: schema.artworks.imageHash })
+      .from(schema.artworks).where(isNotNull(schema.artworks.imageHash))).map(a => a.hash).filter(Boolean) as string[];
+    const libHashSet = new Set(libHashes);
+    const sessionHashes = new Set<string>();
+
     let totalResults = 0, newResults = 0;
 
     for (const platform of platforms) {
-      let items: { imageUrl: string; title?: string | null; author?: string | null; sourceUrl?: string; tags?: string[] }[] = [];
       try {
-        if (platform === 'baidu') {
-          // 百度图片：免登录 JSON API，最可靠
-          const keywords = searchKeywords.length ? searchKeywords : ['插画'];
-          for (const kw of keywords) {
-            const imgs = await searchBaiduImages(kw, 20);
-            console.log(`[search] 百度 "${kw}": ${imgs.length} 张`);
-            items.push(...imgs.map(im => ({
-              imageUrl: im.imageUrl, title: im.title || `百度·${kw}`, author: null, sourceUrl: im.sourceUrl || im.imageUrl, tags: [kw],
-            })));
-          }
-        } else if (platform === 'mihuashi') {
-          const keywords = searchKeywords.length ? searchKeywords : ['日系'];
-          for (const kw of keywords) {
-            const arts = await searchMihuashi(kw, 15);
-            console.log(`[search] 米画师 "${kw}": ${arts.length} 张`);
-            items.push(...arts.map(a => ({
-              imageUrl: a.imageUrl, title: `米画师·${kw}`, author: a.author ?? null, sourceUrl: a.imageUrl, tags: [kw],
-            })));
-          }
-        } else if (platform === 'xiaohongshu') {
+        if (platform === 'xiaohongshu') {
           if (!xhsCookie) { console.error('[search] 小红书: 未配置 XHS_COOKIE，跳过'); }
           else {
             const keywords = searchKeywords.length ? searchKeywords : ['插画'];
             const tax = await loadTaxonomy();
-            // 预加载维度表（rootCode 判定用）
-            const dims = await db.select().from(schema.tagDimensions);
-            const dimById = new Map(dims.map(d => [d.id, d]));
-            const rootCodeOf = (dimId: number): string => {
-              let d = dimById.get(dimId), cur = dimId;
-              while (d && d.parentId) { cur = d.parentId; d = dimById.get(cur); }
-              return d?.code ?? '';
-            };
-            // 预加载库内已有 hash（去重用）
-            const libHashes = (await db.select({ hash: schema.artworks.imageHash })
-              .from(schema.artworks).where(isNotNull(schema.artworks.imageHash))).map(a => a.hash).filter(Boolean) as string[];
-            const libHashSet = new Set(libHashes);
-            // 本 session 内已收集的 hash（同 session 去重）
-            const sessionHashes = new Set<string>();
-
             for (const kw of keywords) {
               if (isAborted()) { console.log(`[search] session ${sessionId} 已终止`); break; }
               const notes = await searchXhsByKeyword(kw, 300, xhsCookie);
@@ -157,15 +138,16 @@ export class SearchService {
                 let quality = 0;
                 let aiTags: any[] = [];
                 let imageHash: string | null = null;
+                let buf: Buffer | null = null;
                 try {
-                  const { buf } = await downloadImage(n.images[0]);
+                  buf = (await downloadImage(n.images[0])).buf;
                   try { imageHash = await aHash(buf); } catch {}
                   if (imageHash) {
                     if ([...libHashSet].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipDup++; continue; }
                     if ([...sessionHashes].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipDup++; continue; }
                     sessionHashes.add(imageHash);
                   }
-                  const b64 = buf.toString('base64');
+                  const b64 = buf!.toString('base64');
                   const mime = 'image/jpeg';
                   const { gemini } = await callBoth(b64, mime, tax.prompt);
                   const gParsed = extractJson(gemini);
@@ -181,7 +163,14 @@ export class SearchService {
                   console.error(`[search] AI判断失败 "${n.title?.slice(0, 20)}": ${e.message}`);
                 }
                 if (!isArtwork) { skipNotArt++; continue; }
-                if (quality < 5) { skipLowQ++; continue; }
+                if (quality < MIN_QUALITY) { skipLowQ++; continue; }
+                // CLIP 相似度（image 模式）：算失败(null)不淘汰，避免误杀；低于下限才丢
+                let similarity: number | null = null;
+                if (useClip && buf) {
+                  try { similarity = cosine(refEmbedding!, await embedImage(buf)); }
+                  catch { similarity = null; }
+                  if (similarity !== null && similarity < SIM_FLOOR) { skipLowQ++; continue; }
+                }
                 kept++;
                 // 增量写入：每筛选完一张立即写 DB
                 const dedupKey = n.sourceUrl || n.images[0] || '';
@@ -195,6 +184,7 @@ export class SearchService {
                   allImages: n.images,
                   aiTags: aiTags.length ? aiTags : null,
                   imageHash: imageHash || null,
+                  similarity,
                   title: n.title || kw,
                   author: n.author || null,
                   tags: n.xhsTags || [],
@@ -203,7 +193,7 @@ export class SearchService {
                 });
                 totalResults++;
                 if (isNew) newResults++;
-                // 每10张更新一次 session 计数（前端轮询能看到进度）
+                // 每3张更新一次 session 计数（前端轮询能看到进度）
                 if (progressProcessed % 3 === 0) {
                   await db.update(schema.searchSessions).set({ resultCount: totalResults, newCount: newResults, searchTags: { tags: body.tags, fuzzyRatio, progress: { total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString() } } }).where(eq(schema.searchSessions.id, sessionId));
                   console.log(`[search] 进度: ${progressProcessed}/${progressTotal} 已处理，保留 ${kept} 张（非绘画 ${skipNotArt}，低质 ${skipLowQ}，重复 ${skipDup}）`);
@@ -215,41 +205,80 @@ export class SearchService {
         } else if (platform === 'weibo') {
           const keywords = searchKeywords.length ? searchKeywords : ['插画'];
           for (const kw of keywords) {
+            if (isAborted()) { console.log(`[search] session ${sessionId} 已终止`); break; }
             const imgs = await searchWeiboByKeyword(kw, 15);
-            console.log(`[search] 微博 "${kw}": ${imgs.length} 张`);
-            items.push(...imgs.map(im => ({
-              imageUrl: im.url, title: im.title || `微博·${kw}`, author: null, sourceUrl: im.url, tags: [kw],
-            })));
+            console.log(`[search] 微博 "${kw}": ${imgs.length} 张，开始 AI 筛选（增量写入）...`);
+            progressTotal += imgs.length;
+            await db.update(schema.searchSessions).set({ searchTags: { tags: body.tags, fuzzyRatio, progress: { total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString() } } }).where(eq(schema.searchSessions.id, sessionId));
+            let kept = 0, skipNotArt = 0, skipDup = 0, skipLowQ = 0;
+            for (const im of imgs) {
+              if (isAborted()) { console.log(`[search] session ${sessionId} 已终止（已处理 ${progressProcessed} 张）`); break; }
+              progressProcessed++;
+              let isArtwork = false;
+              let quality = 0;
+              let skipped = false;
+              let imageHash: string | null = null;
+              let buf: Buffer | null = null;
+              try {
+                const downloaded = await downloadImage(im.url);
+                buf = downloaded.buf;
+                const type = downloaded.type;
+                try { imageHash = await aHash(buf); } catch {}
+                if (imageHash) {
+                  if ([...libHashSet].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipDup++; continue; }
+                  if ([...sessionHashes].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipDup++; continue; }
+                  sessionHashes.add(imageHash);
+                }
+                const gate = await gateArtwork(buf.toString('base64'), type);
+                isArtwork = gate.isArtwork;
+                quality = gate.quality;
+                skipped = gate.skipped;
+              } catch (e: any) {
+                console.error(`[search] 微博图处理失败 "${im.title?.slice(0, 20)}": ${e.message}`);
+              }
+              // AI 未真正质检（无 key/调用失败）：入库但 quality=null 标"未质检"，交人工复核
+              if (!skipped) {
+                if (!isArtwork) { skipNotArt++; continue; }
+                if (quality < MIN_QUALITY) { skipLowQ++; continue; }
+              }
+              // CLIP 相似度（image 模式）
+              let similarity: number | null = null;
+              if (useClip && buf) {
+                try { similarity = cosine(refEmbedding!, await embedImage(buf)); }
+                catch { similarity = null; }
+                if (!skipped && similarity !== null && similarity < SIM_FLOOR) { skipLowQ++; continue; }
+              }
+              kept++;
+              const dedupKey = im.url;
+              const isNew = !prevUrls.has(dedupKey) && !prevHashes.has(im.url);
+              await db.insert(schema.searchResults).values({
+                sessionId,
+                referenceImageId: body.referenceId,
+                platform: 'weibo',
+                sourceUrl: im.url,
+                imageUrl: im.url,
+                allImages: [im.url],
+                imageHash: imageHash || null,
+                similarity,
+                quality: skipped ? null : quality,
+                title: im.title || `微博·${kw}`,
+                author: null,
+                tags: [kw],
+                isNew: isNew ? 1 : 0,
+                tier: 'tier1',
+              });
+              totalResults++;
+              if (isNew) newResults++;
+              if (progressProcessed % 3 === 0) {
+                await db.update(schema.searchSessions).set({ resultCount: totalResults, newCount: newResults, searchTags: { tags: body.tags, fuzzyRatio, progress: { total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString() } } }).where(eq(schema.searchSessions.id, sessionId));
+                console.log(`[search] 进度: ${progressProcessed}/${progressTotal} 已处理，保留 ${kept} 张（非绘画 ${skipNotArt}，低质 ${skipLowQ}，重复 ${skipDup}）`);
+              }
+            }
+            console.log(`[search] 微博 "${kw}" 筛选完成: 保留 ${kept}，非绘画 ${skipNotArt}，低质 ${skipLowQ}，重复 ${skipDup}`);
           }
         }
       } catch (e: any) {
         console.error(`[search] ${platform} 失败: ${e.message}`);
-      }
-
-      // 去重 + 存结果（按 sourceUrl 去重，imageUrl 空也存）
-      const seen = new Set<string>();
-      for (const item of items) {
-        const dedupKey = item.sourceUrl || item.imageUrl || '';
-        if (!dedupKey || seen.has(dedupKey)) continue;
-        seen.add(dedupKey);
-        const isNew = !prevUrls.has(dedupKey) && !prevHashes.has(item.imageUrl || '');
-        const [rr] = await db.insert(schema.searchResults).values({
-          sessionId,
-          referenceImageId: body.referenceId,
-          platform,
-          sourceUrl: item.sourceUrl || null,
-          imageUrl: item.imageUrl || null,
-          allImages: (item as any).allImages || null,
-          aiTags: (item as any).aiTags || null,
-          imageHash: (item as any).imageHash || null,
-          title: item.title || null,
-          author: item.author || null,
-          tags: item.tags || [],
-          isNew: isNew ? 1 : 0,
-          tier: 'tier1',
-        });
-        totalResults++;
-        if (isNew) newResults++;
       }
     }
 
@@ -289,7 +318,15 @@ export class SearchService {
   async listResults(sessionId: number, tier?: string) {
     const conds = [eq(schema.searchResults.sessionId, sessionId)];
     if (tier) conds.push(eq(schema.searchResults.tier, tier as any));
-    return db.select().from(schema.searchResults).where(and(...conds)).orderBy(desc(schema.searchResults.isNew), desc(schema.searchResults.id));
+    const rows = await db.select().from(schema.searchResults).where(and(...conds));
+    // image 模式（session 有 refEmbedding）按相似度降序(null 安全，null 在后)；否则按 isNew/id
+    const [s] = await db.select().from(schema.searchSessions).where(eq(schema.searchSessions.id, sessionId));
+    if (s?.refEmbedding) {
+      rows.sort((a: any, b: any) => (b.similarity ?? -1) - (a.similarity ?? -1));
+    } else {
+      rows.sort((a: any, b: any) => (b.isNew - a.isNew) || (b.id - a.id));
+    }
+    return rows;
   }
 
   // 复核：tier1 → tier2
@@ -304,49 +341,10 @@ export class SearchService {
     return { id, tier: 'rejected' };
   }
 
-  // 正式入库：tier2 → promoted（下载图 → 建作品 → 建画师 → 同步画师库+画廊）
+  // 正式入库：tier2 → promoted（共用 promoteSearchResult）
   async promote(id: number) {
     const [result] = await db.select().from(schema.searchResults).where(eq(schema.searchResults.id, id));
     if (!result) throw new Error('结果不存在');
-
-    // 下载图片
-    if (!result.imageUrl) throw new Error('结果无图片URL');
-    const uploadsDir = join(process.cwd(), 'uploads');
-    await mkdir(uploadsDir, { recursive: true });
-    const { buf, type } = await downloadImage(result.imageUrl);
-    let imageHash: string | null = null;
-    try { imageHash = await aHash(buf); } catch {}
-
-    // 库内去重：已入库过的同图不重复建作品
-    const dupId = await findDuplicateArtwork(imageHash);
-    if (dupId) {
-      await db.update(schema.searchResults).set({ tier: 'promoted', promotedArtworkId: dupId }).where(eq(schema.searchResults.id, id));
-      return { id, tier: 'promoted', artworkId: dupId, duplicate: true };
-    }
-
-    const ext = type.includes('png') ? 'png' : type.includes('webp') ? 'webp' : 'jpg';
-    const filename = `search-${id}-${Date.now()}.${ext}`;
-    await writeFile(join(uploadsDir, filename), buf);
-
-    // 找/建画师
-    const artistId = await findOrCreateArtist(result.author, result.platform, result.sourceUrl);
-
-    // 建作品
-    const [aw] = await db.insert(schema.artworks).values({
-      artistId,
-      title: result.title || null,
-      imageUrl: `/uploads/${filename}`,
-      thumbUrl: `/uploads/${filename}`,
-      imageHash,
-      sourcePlatform: result.platform,
-      sourceUrl: result.sourceUrl || null,
-      tagStatus: 'pending',
-    });
-    const artworkId = (aw as any).insertId;
-
-    // 标记结果为 promoted
-    await db.update(schema.searchResults).set({ tier: 'promoted', promotedArtworkId: artworkId }).where(eq(schema.searchResults.id, id));
-    await logOperation({ type: 'search_promote', targetType: 'search_result', targetId: id, summary: `寻源结果 #${id} 正式入库 → 作品 #${artworkId}` });
-    return { id, tier: 'promoted', artworkId, artistId };
+    return promoteSearchResult(result, { filePrefix: 'search', logType: 'search_promote' });
   }
 }

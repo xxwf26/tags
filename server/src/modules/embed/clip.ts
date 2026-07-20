@@ -19,6 +19,9 @@ let readyPromise: Promise<void> | null = null;
 let seq = 0;
 let restarts = 0;
 let disabled = false;
+// Windows 上 sharp/libvips 处理某些大图会 GLib segfault，worker 线程隔离不住、会拖垮整个进程。
+// 故默认禁用 CLIP（image 模式自动降级为 tags 纯质量排序，服务器稳定）。需显式 CLIP_ENABLED=1 才开启。
+const clipEnabled = process.env.CLIP_ENABLED === '1';
 
 type Pending = { resolve: (v: number[]) => void; reject: (e: Error) => void; timer: NodeJS.Timeout };
 const pending = new Map<number, Pending>();
@@ -50,18 +53,17 @@ function ensureWorker(): Promise<void> {
       return reject(e instanceof Error ? e : new Error(String(e)));
     }
     worker = w;
-    let settled = false;   // readyPromise 是否已敲定——worker ready 之后再崩就不能再 reject 它了
 
     const onDead = (err: Error) => {
       rejectAllPending(new Error('CLIP worker 已退出'));
       worker = null;
       readyPromise = null;
       if (++restarts >= MAX_RESTARTS) disabled = true;
-      if (!settled) { settled = true; reject(err); }   // 只在 ready 之前才 reject readyPromise
+      reject(err);
     };
 
     w.on('message', (m: any) => {
-      if (m?.type === 'ready') { settled = true; resolve(); return; }
+      if (m?.type === 'ready') { resolve(); return; }
       if (m?.type === 'fatal') { return; } // 紧跟着会触发 exit，由 onDead 统一处理
       const p = pending.get(m.id);
       if (!p) return;
@@ -70,7 +72,6 @@ function ensureWorker(): Promise<void> {
       if (m.error) p.reject(new Error(m.error));
       else p.resolve(m.embedding);
     });
-    // worker 的 error/exit 事件必须有监听器，否则 error 会冒泡成主进程 uncaughtException → 整个后端崩溃。
     w.on('error', (e) => onDead(e instanceof Error ? e : new Error(String(e))));
     w.on('exit', (code) => { if (code !== 0) onDead(new Error(`CLIP worker 退出码 ${code}`)); });
   });
@@ -83,21 +84,14 @@ export async function embedImage(buf: Buffer): Promise<number[]> {
   await ensureWorker();
   const id = ++seq;
   // 切出独立 ArrayBuffer 再 transfer（零拷贝转移所有权给 worker）
-  const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+  const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
   return new Promise<number[]>((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id);
       reject(new Error('CLIP embedding 超时'));
     }, REQUEST_TIMEOUT);
     pending.set(id, { resolve, reject, timer });
-    // postMessage 对已死的 worker 会同步抛错——包起来 reject 本请求，避免异常逃逸
-    try {
-      worker!.postMessage({ id, buffer: ab }, [ab]);
-    } catch (e: any) {
-      clearTimeout(timer);
-      pending.delete(id);
-      reject(e instanceof Error ? e : new Error(String(e)));
-    }
+    worker!.postMessage({ id, buffer: ab }, [ab]);
   });
 }
 
@@ -111,5 +105,5 @@ export function cosine(a: number[], b: number[]): number {
 
 // 供调用方在算之前判断是否值得尝试（已永久降级则不必走 image 模式）。
 export function isEmbedAvailable(): boolean {
-  return !disabled;
+  return clipEnabled && !disabled;
 }

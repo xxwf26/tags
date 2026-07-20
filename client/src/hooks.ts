@@ -1,5 +1,5 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchTags, fetchTagsAll, fetchArtworks, fetchArtists, fetchArtist, createArtwork, deleteArtwork, setArtworkTags, updateEngage, tagArtwork, tagBatch, confirmArtwork, crawlNote, fetchCandidates, promoteCandidate, rejectCandidate, searchByImage, createTag, updateTag, deleteTag, createDimension, crawlMihuashi, fetchMihuashiTags, fetchOperations, undoOperation, redoOperation, type Artwork, type Artist, uploadReference, fetchReferences, updateReferenceTags, startSearch, fetchSearchSessions, fetchSearchResults, reviewSearchResult, promoteSearchResult, rejectSearchResult, deleteReference, startDiscover, fetchDiscoverTask, fetchDiscoverResults, reviewDiscover, promoteDiscover, rejectDiscover } from './api'
+import { useQuery, useMutation, useQueryClient, useQueries } from '@tanstack/react-query';
+import { fetchTags, fetchTagsAll, fetchArtworks, fetchArtists, fetchArtist, createArtwork, deleteArtwork, setArtworkTags, updateEngage, tagArtwork, tagBatch, confirmArtwork, searchByImage, createTag, updateTag, deleteTag, createDimension, fetchMihuashiFilterChips, fetchOperations, undoOperation, redoOperation, type Artwork, type Artist, uploadReference, fetchReferences, updateReferenceTags, startSearch, fetchSearchSessions, fetchSearchResults, reviewSearchResult, promoteSearchResult, rejectSearchResult, deleteReference, startDiscover, fetchDiscoverTask, fetchDiscoverResults, fetchDiscoverSessionsList, reviewDiscover, promoteDiscover, rejectDiscover } from './api'
 
 export function useTags() {
   return useQuery({ queryKey: ['tags'], queryFn: fetchTags });
@@ -59,29 +59,8 @@ export function useConfirmArtwork() {
   return useMutation({ mutationFn: (id: number) => confirmArtwork(id),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['artworks'] }); qc.invalidateQueries({ queryKey: ['artist'] }); } });
 }
-export function useCandidates(status = 'pending') {
-  return useQuery({ queryKey: ['candidates', status], queryFn: () => fetchCandidates(status) });
-}
-export function useCrawlNote() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: crawlNote, onSuccess: () => qc.invalidateQueries({ queryKey: ['candidates'] }) });
-}
-export function usePromoteCandidate() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: ({ id, body }: { id: number; body: { artistId?: number; newArtist?: boolean } }) => promoteCandidate(id, body),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['candidates'] }); qc.invalidateQueries({ queryKey: ['artists'] }); qc.invalidateQueries({ queryKey: ['artworks'] }); } });
-}
-export function useRejectCandidate() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: (id: number) => rejectCandidate(id), onSuccess: () => qc.invalidateQueries({ queryKey: ['candidates'] }) });
-}
-export function useMihuashiTags() {
-  return useQuery({ queryKey: ['mihuashi-tags'], queryFn: fetchMihuashiTags, staleTime: 600000 });
-}
-export function useCrawlMihuashi() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: ({ tag, limit }: { tag: string; limit: number }) => crawlMihuashi(tag, limit),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['candidates'] }) });
+export function useMihuashiFilterChips() {
+  return useQuery({ queryKey: ['mihuashi-filter-chips'], queryFn: fetchMihuashiFilterChips, staleTime: 600000 });
 }
 export function useImageSearch() {
   return useMutation({ mutationFn: (file: File) => searchByImage(file) });
@@ -178,8 +157,22 @@ export function useDiscoverTask(sessionId: number | null) {
     refetchInterval: (q) => (q.state.data && q.state.data.status === 'running' ? 1500 : false),
   });
 }
+// 并行轮询多个发现 session 的任务状态（支持多版本并行寻源）。running 的每 1.5s 刷新，完成的停。
+export function useDiscoverSessions(ids: number[]) {
+  return useQueries({
+    queries: ids.map(id => ({
+      queryKey: ['discover-task', id],
+      queryFn: () => fetchDiscoverTask(id),
+      enabled: !!id,
+      refetchInterval: (q: any) => (q.state.data && q.state.data.status === 'running' ? 2000 : false),
+    })),
+  });
+}
 export function useDiscoverResults(sessionId: number, tier?: string) {
   return useQuery({ queryKey: ['discover-results', sessionId, tier], queryFn: () => fetchDiscoverResults(sessionId, tier), enabled: !!sessionId });
+}
+export function useDiscoverSessionsList() {
+  return useQuery({ queryKey: ['discover-sessions-list'], queryFn: () => fetchDiscoverSessionsList(30), staleTime: 5000 });
 }
 export function useReviewDiscover() {
   const qc = useQueryClient();

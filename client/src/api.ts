@@ -92,39 +92,9 @@ export async function confirmArtwork(id: number) {
   if (!r.ok) throw new Error('confirm failed');
   return r.json();
 }
-export type Candidate = {
-  id: number; sourcePlatform: string; sourceUrl: string; artistName: string | null;
-  raw: { noteId?: string; title: string; desc: string; tags: string[]; images: { url: string; width: number | null; height: number | null }[] };
-  status: string; promotedArtistId: number | null; dedup?: boolean;
-};
-export async function crawlNote(input: string): Promise<{ total: number; results: any[] }> {
-  const r = await fetch(BASE + '/crawl/note', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: input }) });
-  if (!r.ok) throw new Error('crawl failed');
-  return r.json();
-}
-export async function fetchCandidates(status = 'pending'): Promise<Candidate[]> {
-  const r = await fetch(BASE + '/candidates?status=' + status);
-  if (!r.ok) throw new Error('candidates failed');
-  return r.json();
-}
-export async function promoteCandidate(id: number, body: { artistId?: number; newArtist?: boolean }) {
-  const r = await fetch(BASE + '/candidates/' + id + '/promote', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  if (!r.ok) throw new Error('promote failed');
-  return r.json();
-}
-export async function rejectCandidate(id: number) {
-  const r = await fetch(BASE + '/candidates/' + id + '/reject', { method: 'POST' });
-  if (!r.ok) throw new Error('reject failed');
-  return r.json();
-}
-export async function crawlMihuashi(tag: string, limit = 30) {
-  const r = await fetch(BASE + '/crawl/mihuashi', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tag, limit }) });
-  if (!r.ok) throw new Error('mihuashi crawl failed');
-  return r.json();
-}
-export async function fetchMihuashiTags(): Promise<{ id: number; name: string; type: string }[]> {
-  const r = await fetch(BASE + '/mihuashi/tags');
-  if (!r.ok) throw new Error('mihuashi tags failed');
+export async function fetchMihuashiFilterChips(): Promise<{ category: string; name: string }[]> {
+  const r = await fetch(BASE + '/mihuashi/filter-chips');
+  if (!r.ok) throw new Error('mihuashi filter-chips failed');
   return r.json();
 }
 export type SimilarArtwork = Artwork & { distance: number };
@@ -259,8 +229,7 @@ export type DiscoverResult = {
   tags: string[]; allImages: string[] | null; imageHash: string | null; quality: number | null; similarity: number | null;
   tier: 'tier1' | 'tier2' | 'promoted' | 'rejected'; promotedArtworkId: number | null; createdAt: string;
 };
-export type DiscoverStats = { recalled: number; unique: number; dedup: number; downloadFail: number; notArtwork: number; lowQuality: number; aiSkipped: number; lowSimilarity: number; embedFail: number; embedSkipped: number; kept: number };
-export type DiscoverTask = { status: string; done: number; total: number; resultCount: number; mode: 'image' | 'tags'; stats?: DiscoverStats | null };
+export type DiscoverTask = { status: string; done: number; total: number; resultCount: number; mode: 'image' | 'tags'; stats?: any };
 // 发起发现：referenceId(可选) + tags(可选 [{label}]) + platforms
 export async function startDiscover(body: { referenceId?: number | null; tags?: { label: string }[]; platforms?: string[] }): Promise<{ sessionId: number; mode: 'image' | 'tags' }> {
   const r = await fetch(BASE + '/discover/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -268,6 +237,13 @@ export async function startDiscover(body: { referenceId?: number | null; tags?: 
 }
 export async function fetchDiscoverTask(sessionId: number): Promise<DiscoverTask> {
   const r = await fetch(BASE + '/discover/task/' + sessionId); if (!r.ok) throw new Error('task failed'); return r.json();
+}
+export type DiscoverSession = {
+  id: number; mode: 'image' | 'tags'; status: string; resultCount: number;
+  tags: string[]; platforms: string[] | null; stats: any; createdAt: string;
+};
+export async function fetchDiscoverSessionsList(limit = 30): Promise<DiscoverSession[]> {
+  const r = await fetch(BASE + '/discover/sessions?limit=' + limit); if (!r.ok) throw new Error('sessions failed'); return r.json();
 }
 export async function fetchDiscoverResults(sessionId: number, tier?: string): Promise<DiscoverResult[]> {
   const q = tier ? '&tier=' + tier : '';

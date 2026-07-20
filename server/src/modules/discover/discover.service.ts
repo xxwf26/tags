@@ -216,6 +216,18 @@ export class DiscoverService {
     return { status: s.status, done: s.doneCount ?? 0, total: s.totalCount ?? 0, resultCount: s.resultCount ?? 0, mode: s.mode, stats };
   }
 
+  // 历史会话列表：发现 session（mode 非空；寻源 session 的 mode 为 null 不会列出），最新在前
+  async listSessions(limit = 30) {
+    const rows = await db.select().from(schema.searchSessions)
+      .where(isNotNull(schema.searchSessions.mode))
+      .orderBy(desc(schema.searchSessions.id)).limit(limit);
+    return rows.map((s: any) => ({
+      id: s.id, mode: s.mode, status: s.status, resultCount: s.resultCount ?? 0,
+      tags: Array.isArray(s.searchTags?.tags) ? s.searchTags.tags : [],
+      platforms: s.platforms, stats: s.searchTags?.stats ?? null, createdAt: s.createdAt,
+    }));
+  }
+
   // 结果列表：image 模式按 相似度×质量 降序，tags 模式按质量降序。
   // 应用层排序（非 SQL orderBy）：similarity×quality 是复合式且要处理 null，单 session 结果量小无性能问题。
   async listResults(sessionId: number, tier?: string) {

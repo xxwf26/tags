@@ -3,7 +3,6 @@ import { SearchService } from './search.service.js';
 
 @Controller('search')
 export class SearchController {
-  // 见 discover.controller 说明：tsx/esbuild 不 emit 装饰器元数据，构造注入会失败，故手动实例化。
   private readonly searchService = new SearchService();
 
   // 发起搜索：POST /api/search/start {referenceId, tags, platforms}

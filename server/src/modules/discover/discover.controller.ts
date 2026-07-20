@@ -19,6 +19,12 @@ export class DiscoverController {
     return this.discoverService.taskStatus(id);
   }
 
+  // 历史会话列表：GET /api/discover/sessions?limit=30（只列发现 session：mode 非空）
+  @Get('sessions')
+  sessions(@Query('limit') limit?: string) {
+    return this.discoverService.listSessions(limit ? Number(limit) : 30);
+  }
+
   // 结果列表：GET /api/discover/results?sessionId=X&tier=tier1
   @Get('results')
   results(@Query('sessionId') sessionId: string, @Query('tier') tier?: string) {
