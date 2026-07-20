@@ -11,10 +11,13 @@ import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
 import { logOperation } from '../operation/op.js';
 import { loadTaxonomy, extractJson, normalizeOutput, callBoth } from '../tagging/ai.js';
 import { SettingsService } from '../settings/settings.service.js';
+import { findDuplicateArtwork, findOrCreateArtist } from '../discover/promote-helpers.js';
+import { Injectable } from '@nestjs/common';
 
 // 正在运行的搜索进程（用于终止）
 const runningSearches = new Map<number, boolean>(); // sessionId → aborted?
 
+@Injectable()
 export class SearchService {
   // 终止搜索
   async abort(sessionId: number) {
@@ -64,6 +67,11 @@ export class SearchService {
     const xhsCookie = await settingsSvc.getXhsCookie();
     const fuzzyRatio = body.fuzzyRatio ?? 0.5;
 
+    // 防重复：同一参考图已有进行中的搜索则拒绝，避免并发多任务打爆平台反爬
+    const [running] = await db.select({ id: schema.searchSessions.id }).from(schema.searchSessions)
+      .where(and(eq(schema.searchSessions.referenceImageId, body.referenceId), eq(schema.searchSessions.status, 'running'))).limit(1);
+    if (running) throw new Error('该参考图正在搜索中，请等待完成');
+
     // 加载维度表，解析每个标签的顶层 code（genre/technique/...）
     const dims = await db.select().from(schema.tagDimensions);
     const dimById = new Map(dims.map(d => [d.id, d]));
@@ -107,7 +115,7 @@ export class SearchService {
             const arts = await searchMihuashi(kw, 15);
             console.log(`[search] 米画师 "${kw}": ${arts.length} 张`);
             items.push(...arts.map(a => ({
-              imageUrl: a.imageUrl, title: `米画师·${kw}`, author: null, sourceUrl: a.imageUrl, tags: [kw],
+              imageUrl: a.imageUrl, title: `米画师·${kw}`, author: a.author ?? null, sourceUrl: a.imageUrl, tags: [kw],
             })));
           }
         } else if (platform === 'xiaohongshu') {
@@ -308,21 +316,20 @@ export class SearchService {
     const { buf, type } = await downloadImage(result.imageUrl);
     let imageHash: string | null = null;
     try { imageHash = await aHash(buf); } catch {}
+
+    // 库内去重：已入库过的同图不重复建作品
+    const dupId = await findDuplicateArtwork(imageHash);
+    if (dupId) {
+      await db.update(schema.searchResults).set({ tier: 'promoted', promotedArtworkId: dupId }).where(eq(schema.searchResults.id, id));
+      return { id, tier: 'promoted', artworkId: dupId, duplicate: true };
+    }
+
     const ext = type.includes('png') ? 'png' : type.includes('webp') ? 'webp' : 'jpg';
     const filename = `search-${id}-${Date.now()}.${ext}`;
     await writeFile(join(uploadsDir, filename), buf);
 
     // 找/建画师
-    let artistId: number | null = null;
-    if (result.author) {
-      const all = await db.select().from(schema.artists);
-      const ex = all.find(a => (a.name || '').trim() === result.author!.trim());
-      if (ex) artistId = ex.id;
-      else {
-        const [ar] = await db.insert(schema.artists).values({ name: result.author.trim() });
-        artistId = (ar as any).insertId;
-      }
-    }
+    const artistId = await findOrCreateArtist(result.author, result.platform, result.sourceUrl);
 
     // 建作品
     const [aw] = await db.insert(schema.artworks).values({

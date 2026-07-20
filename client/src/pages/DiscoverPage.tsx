@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useReferences, useUploadReference, useStartDiscover, useDiscoverTask, useDiscoverResults, useReviewDiscover, usePromoteDiscover, useRejectDiscover, useDeleteReference, useTags } from '../hooks';
-import { tagsByTopDim } from '../api';
+import { useReferences, useUploadReference, useStartDiscover, useDiscoverTask, useDiscoverResults, useReviewDiscover, usePromoteDiscover, useRejectDiscover, useDeleteReference } from '../hooks';
 
 const PLATFORMS = [
   { key: 'mihuashi', label: '米画师' },
@@ -8,11 +7,14 @@ const PLATFORMS = [
   { key: 'xiaohongshu', label: '小红书' },
 ];
 const PLATFORM_LABEL: Record<string, string> = { mihuashi: '米画师', weibo: '微博', xiaohongshu: '小红书' };
-const DIM_ROWS = [
-  { code: 'genre', label: '画风' }, { code: 'subject', label: '题材' },
-  { code: 'technique', label: '技法' }, { code: 'usage', label: '用途' },
-  { code: 'tone', label: '色调' }, { code: 'character', label: '人物' },
+// 米画师官方标签（其站内筛选只认这些原词，故直接以它为准；对小红书/微博也通用作关键词）。
+// 分两个维度：画风 + 类型，与米画师页面上的两个下拉一致。
+const MIHUASHI_TAG_ROWS = [
+  { label: '画风', tags: ['日系', '平涂', '萌系', '厚涂', '赛璐璐', '古风', '中国风', '童趣', '写实系', '韩系', '少女漫画', '欧美系', '水彩', '美式卡通', '白描', '科幻风', '像素风', '水墨', '硬派'] },
+  { label: '类型', tags: ['头像', '插图', 'Q版', '自设/OC', '立绘', '角色设计', '壁纸', '封面', '场景', '海报', '概念设计', '印花', '图标', 'Live2D', 'CG', '和纸胶带', '像素图', '卡牌', '条漫', 'UI', '版型', '分镜', '抱枕', '特效'] },
 ];
+// 全部米画师标签（供 AI 参考图预选时过滤——只预选命中米画师标签的）
+const MIHUASHI_ALL_TAGS = new Set(MIHUASHI_TAG_ROWS.flatMap(r => r.tags));
 const TIER_LABEL: Record<string, { label: string; cls: string }> = {
   tier1: { label: '待复核', cls: 'text-stone-500 bg-stone-100' },
   tier2: { label: '已复核', cls: 'text-sky-600 bg-sky-50' },
@@ -23,7 +25,6 @@ const TIER_LABEL: Record<string, { label: string; cls: string }> = {
 export function DiscoverPage() {
   const refsQ = useReferences();
   const upload = useUploadReference();
-  const tagsQ = useTags();
   const startM = useStartDiscover();
   const reviewM = useReviewDiscover();
   const promoteM = usePromoteDiscover();
@@ -40,15 +41,13 @@ export function DiscoverPage() {
   const taskQ = useDiscoverTask(sessionId);
   const resultsQ = useDiscoverResults(taskQ.data?.status === 'ok' ? (sessionId ?? 0) : 0);
   const ref = (refsQ.data ?? []).find(r => r.id === selectedRef);
-  const byDim = tagsByTopDim(tagsQ.data ?? []);
-  const dimRows = DIM_ROWS.map(d => ({ ...d, tags: byDim.get(d.code)?.tags ?? [] })).filter(d => d.tags.length);
 
-  // 上传参考图 → AI 建议标签预勾选（跨全维度）
+  // 上传参考图 → AI 建议标签预勾选（只保留命中米画师标签的，避免选到搜不到的词）
   const loadFile = useCallback((f: File | null) => {
     if (!f) return;
     upload.mutate(f, { onSuccess: (r) => {
       setSelectedRef(r.id);
-      setSelectedLabels(new Set((r.aiTags ?? []).map(t => t.label).filter(Boolean)));
+      setSelectedLabels(new Set((r.aiTags ?? []).map(t => t.label).filter(l => l && MIHUASHI_ALL_TAGS.has(l))));
     } });
   }, [upload]);
 
@@ -113,22 +112,21 @@ export function DiscoverPage() {
           </div>
 
           <div className="flex-1 min-w-0">
-            {/* 全维度标签，按维度分组 */}
-            <div className="text-[12px] text-stone-500 mb-1">画风标签（点击多选，可跨维度组合{upload.isPending ? '，AI 建议中…' : ref ? '，已按参考图预选' : ''}）</div>
+            {/* 米画师官方标签（画风 + 类型两组），点击多选可组合 */}
+            <div className="text-[12px] text-stone-500 mb-1">画风 / 类型标签（点击多选，可组合{upload.isPending ? '，AI 建议中…' : ref ? '，已按参考图预选' : ''}）</div>
             <div className="space-y-1 max-h-40 overflow-auto pr-1">
-              {dimRows.map(row => (
-                <div key={row.code} className="flex items-start gap-2">
+              {MIHUASHI_TAG_ROWS.map(row => (
+                <div key={row.label} className="flex items-start gap-2">
                   <span className="text-[11px] text-stone-400 w-8 shrink-0 pt-0.5">{row.label}</span>
                   <div className="flex gap-1 flex-wrap">
                     {row.tags.map(t => {
-                      const on = selectedLabels.has(t.label);
-                      return <span key={t.id} onClick={() => toggleLabel(t.label)}
-                        className={`text-[12px] px-2.5 py-0.5 rounded-full cursor-pointer border ${on ? 'bg-xhs text-white border-xhs' : 'bg-white text-stone-500 border-stone-200 hover:border-xhs'}`}>{t.label}</span>;
+                      const on = selectedLabels.has(t);
+                      return <span key={t} onClick={() => toggleLabel(t)}
+                        className={`text-[12px] px-2.5 py-0.5 rounded-full cursor-pointer border ${on ? 'bg-xhs text-white border-xhs' : 'bg-white text-stone-500 border-stone-200 hover:border-xhs'}`}>{t}</span>;
                     })}
                   </div>
                 </div>
               ))}
-              {!dimRows.length && <span className="text-[11px] text-stone-400">词表未加载</span>}
             </div>
 
             {/* 平台 + 搜索 */}
@@ -168,15 +166,41 @@ export function DiscoverPage() {
       {/* 结果 */}
       {task?.status === 'ok' && (
         <div>
-          <div className="text-[13px] text-stone-500 mb-2 px-1">按质量分排序 · {results.length} 张（AI 已过滤广告/照片/低质）</div>
-          {!results.length && <div className="text-center text-stone-400 py-12">没有符合质量的结果，换个画风或平台试试</div>}
+          {/* 漏斗：让"0 结果 / 结果少"能看清卡在哪个环节 */}
+          {task.stats && (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-stone-400 mb-2 px-1">
+              <span>召回 <b className="text-stone-600">{task.stats.recalled}</b></span>
+              <span>· 去重后 {task.stats.unique}</span>
+              {task.stats.dedup > 0 && <span>· 库内重复 -{task.stats.dedup}</span>}
+              {task.stats.downloadFail > 0 && <span>· 下载失败 -{task.stats.downloadFail}</span>}
+              {task.stats.notArtwork > 0 && <span>· 非绘画 -{task.stats.notArtwork}</span>}
+              {task.stats.lowQuality > 0 && <span>· 低质 -{task.stats.lowQuality}</span>}
+              {task.stats.lowSimilarity > 0 && <span>· 画风不符 -{task.stats.lowSimilarity}</span>}
+              <span>· 保留 <b className="text-emerald-600">{task.stats.kept}</b></span>
+              {task.stats.aiSkipped > 0 && <span className="text-amber-600">⚠ {task.stats.aiSkipped} 张未经 AI 质检（未配置 AI_API_KEY 或调用失败），请人工甄别</span>}
+              {task.stats.embedSkipped > 0 && <span className="text-amber-600">⚠ 本次未做视觉精排（CLIP 不可用），仅按质量排序</span>}
+            </div>
+          )}
+          <div className="text-[13px] text-stone-500 mb-2 px-1">{task.mode === 'image' && !task.stats?.embedSkipped ? '按画风相似度×质量排序' : '按质量分排序'} · {results.length} 张（AI 已过滤广告/照片/低质）</div>
+          {!results.length && (
+            <div className="text-center text-stone-400 py-12">
+              {task.stats && task.stats.recalled === 0
+                ? '平台没搜到内容，换个画风关键词或平台试试（小红书需配 XHS_COOKIE）'
+                : task.stats && task.stats.unique > 0
+                ? '召回的图都被去重或质检过滤了，试试放宽画风或换平台'
+                : '没有符合质量的结果，换个画风或平台试试'}
+            </div>
+          )}
           <div className="masonry columns-2 md:columns-3 lg:columns-4 xl:columns-5 2xl:columns-6">
             {results.map(r => (
               <div key={r.id} className="mb-2.5 break-inside-avoid bg-white rounded-xl overflow-hidden border border-stone-100 card-hover">
                 <div className="relative cursor-zoom-in" onClick={() => { setViewResult(r); setViewIdx(0); }}>
                   <img src={r.imageUrl || ''} referrerPolicy="no-referrer" className="w-full object-cover" style={{ aspectRatio: '3/4' }}
                     onError={e => ((e.target as HTMLImageElement).style.opacity = '0.3')} alt="" />
-                  {r.quality != null && <span className="absolute top-2 left-2 text-[10px] px-1.5 py-0.5 rounded bg-black/50 text-white">质 {r.quality.toFixed(0)}</span>}
+                  {r.quality != null
+                    ? <span className="absolute top-2 left-2 text-[10px] px-1.5 py-0.5 rounded bg-black/50 text-white">质 {r.quality.toFixed(0)}</span>
+                    : <span className="absolute top-2 left-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/80 text-white" title="未经 AI 质检，请人工甄别">未检</span>}
+                  {r.similarity != null && <span className="absolute top-2 right-2 text-[10px] px-1.5 py-0.5 rounded bg-xhs/80 text-white" title="与参考图的画风相似度">似 {(r.similarity * 100).toFixed(0)}</span>}
                   <span className="absolute bottom-2 right-2 text-[10px] px-1.5 py-0.5 rounded bg-black/40 text-white">{PLATFORM_LABEL[r.platform] || r.platform}</span>
                 </div>
                 <div className="p-2">
