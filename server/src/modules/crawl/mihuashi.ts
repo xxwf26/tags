@@ -60,9 +60,11 @@ function withMhsLock<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 export async function searchMihuashi(tagName: string, limit = 30): Promise<MhsArtwork[]> {
-  // 串行 + 冷启动重试：第一个调用（冷浏览器）偶发被反爬挡返回 0，重试一次（热浏览器）即可
-  let arts = await withMhsLock(() => _searchMihuashi(tagName, limit));
-  if (!arts.length) arts = await withMhsLock(() => _searchMihuashi(tagName, limit));
+  // 串行 + 冷启动重试1次：第一个调用（冷浏览器）偶发被挡返回0，重试1次（热浏览器）即可。
+  // 不多重试——连续搜索会被米画师限流返回0或chromium segfault拖垮进程，多重试反而更崩。
+  // 被限流返回0时只能等一会儿再搜，不要立即狂重试。
+  const arts = await withMhsLock(() => _searchMihuashi(tagName, limit));
+  if (!arts.length) { await new Promise(r => setTimeout(r, 2000)); return withMhsLock(() => _searchMihuashi(tagName, limit)); }
   return arts;
 }
 
