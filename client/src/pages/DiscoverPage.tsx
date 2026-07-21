@@ -16,8 +16,8 @@ const MIHUASHI_TAG_ROWS = [
 // 全部米画师标签（供 AI 参考图预选时过滤——只预选命中米画师标签的）
 const MIHUASHI_ALL_TAGS = new Set(MIHUASHI_TAG_ROWS.flatMap(r => r.tags));
 const TIER_LABEL: Record<string, { label: string; cls: string }> = {
-  tier1: { label: '待复核', cls: 'text-stone-500 bg-stone-100' },
-  tier2: { label: '已复核', cls: 'text-sky-600 bg-sky-50' },
+  tier1: { label: '一级库', cls: 'text-stone-500 bg-stone-100' },
+  tier2: { label: '二级库', cls: 'text-sky-600 bg-sky-50' },
   promoted: { label: '已入库', cls: 'text-emerald-600 bg-emerald-50' },
   rejected: { label: '已丢弃', cls: 'text-stone-400 bg-stone-100 line-through' },
 };
@@ -277,6 +277,12 @@ export function DiscoverPage() {
                   <div className="flex items-center justify-between mt-1.5">
                     <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${TIER_LABEL[r.tier]?.cls || ''}`}>{TIER_LABEL[r.tier]?.label || r.tier}</span>
                     {r.tier === 'tier1' && (
+                      <div className="flex gap-1">
+                        <button onClick={() => reviewM.mutate(r.id)} disabled={reviewM.isPending} className="text-[10px] text-sky-600 border border-sky-200 rounded-full px-2 py-0.5 hover:bg-sky-50">复核</button>
+                        <button onClick={() => rejectM.mutate(r.id)} className="text-[10px] text-stone-400 border border-stone-200 rounded-full px-2 py-0.5">丢弃</button>
+                      </div>
+                    )}
+                    {r.tier === 'tier2' && (
                       <div className="flex gap-1">
                         <button onClick={() => promoteM.mutate(r.id)} disabled={promoteM.isPending} className="text-[10px] text-xhs border border-xhs/30 rounded-full px-2 py-0.5 hover:bg-xhs-soft">入库</button>
                         <button onClick={() => rejectM.mutate(r.id)} className="text-[10px] text-stone-400 border border-stone-200 rounded-full px-2 py-0.5">丢弃</button>
