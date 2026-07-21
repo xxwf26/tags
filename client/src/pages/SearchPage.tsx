@@ -178,6 +178,17 @@ export function SearchPage() {
     fetch(BASE + '/settings/xhs-cookie', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: xhsCookie.trim() }) })
       .then(() => { setCookieSaved(true); setXhsCookie(''); setTimeout(() => setCookieSaved(false), 2000); });
   };
+  const [qrLogin, setQrLogin] = useState<{ pending: boolean; msg: string }>({ pending: false, msg: '' });
+  const qrLoginXhs = () => {
+    setQrLogin({ pending: true, msg: '请在弹出的浏览器窗口中扫码登录小红书…' });
+    fetch(BASE + '/settings/xhs-login', { method: 'POST' })
+      .then(r => r.json())
+      .then(r => {
+        if (r.success) { setQrLogin({ pending: false, msg: '✓ 登录成功，cookie已保存' }); setCookieSaved(true); setTimeout(() => setCookieSaved(false), 2000); }
+        else { setQrLogin({ pending: false, msg: '✗ ' + (r.error || '登录失败') }); }
+      })
+      .catch(() => setQrLogin({ pending: false, msg: '✗ 请求失败，请重试' }));
+  };
 
   return (
     <div className="max-w-[1600px] mx-auto px-3 md:px-6 py-3">
@@ -187,6 +198,8 @@ export function SearchPage() {
         {cookieStatus?.hasCookie ? <span className="text-[11px] text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">已设置</span> : <span className="text-[11px] text-rose-500 bg-rose-50 px-2 py-0.5 rounded-full">未设置（搜索无结果）</span>}
         <input value={xhsCookie} onChange={e => setXhsCookie(e.target.value)} placeholder="粘贴小红书 cookie（F12 → Network → Cookie 请求头）" className="flex-1 min-w-[200px] text-[12px] border border-stone-200 rounded-full px-3 py-1.5" />
         <button onClick={saveCookie} disabled={!xhsCookie.trim()} className="text-[12px] bg-xhs text-white rounded-full px-3 py-1.5 font-medium disabled:opacity-40">{cookieSaved ? '✓ 已保存' : '保存'}</button>
+        <button onClick={qrLoginXhs} disabled={qrLogin.pending} className="text-[12px] bg-violet-600 text-white rounded-full px-3 py-1.5 font-medium disabled:opacity-40">{qrLogin.pending ? '等待扫码…' : '📱 扫码登录'}</button>
+        {qrLogin.msg && <span className={`text-[11px] ${qrLogin.pending ? 'text-violet-600' : qrLogin.msg.startsWith('✓') ? 'text-emerald-600' : 'text-rose-500'}`}>{qrLogin.msg}</span>}
       </div>
 
       {/* 上传区 */}
