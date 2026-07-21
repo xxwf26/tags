@@ -16,7 +16,8 @@ import { embedImage, cosine, isEmbedAvailable } from '../embed/clip.js';
 import { findDuplicateArtwork, findOrCreateArtist } from './promote-helpers.js';
 import { Injectable } from '@nestjs/common';
 
-const PER_KW = 20;          // 每平台每关键词召回上限
+const DEFAULT_PER_KW = 20; // 每平台每关键词召回上限（默认；可被 start 的 perKw 覆盖）
+const MAX_PER_KW = 200;    // 上限保护：太大易被平台反爬限流
 const CONCURRENCY = 6;      // 逐张处理并发度
 const MIN_QUALITY = 5;      // AI 质检质量分下限
 const SIM_FLOOR = 0.2;      // image 模式相似度下限（很宽松，只砍明显不相干；同画风梯度可低至 ~0.58）
@@ -53,9 +54,11 @@ export class DiscoverService {
   }
 
   // 发起搜索：解析关键词（选中标签 / 参考图AI标签）→ 建 session → 立即返回，重活丢后台
-  async start(body: { referenceId?: number | null; tags?: { label: string }[]; platforms?: string[] }) {
+  async start(body: { referenceId?: number | null; tags?: { label: string }[]; platforms?: string[]; perKw?: number }) {
     const platforms = (body.platforms ?? ['mihuashi']).filter(p => ['xiaohongshu', 'mihuashi', 'weibo'].includes(p));
     if (!platforms.length) throw new Error('未选择采集平台');
+    // 每平台每关键词召回数量（用户可调），clamp 到 [1, MAX_PER_KW] 防呆 + 防限流
+    const perKw = Math.min(MAX_PER_KW, Math.max(1, Math.floor(Number(body.perKw) || DEFAULT_PER_KW)));
 
     // 关键词：优先用传入标签；若只传了参考图则用其 AI 标签
     let keywords = (body.tags ?? []).map(t => String(t.label).trim()).filter(Boolean);
@@ -93,13 +96,13 @@ export class DiscoverService {
 
     const [sr] = await db.insert(schema.searchSessions).values({
       referenceImageId: referenceId, mode,
-      refEmbedding, searchTags: { tags: keywords }, platforms,
+      refEmbedding, searchTags: { tags: keywords, perKw }, platforms,
       status: 'running', doneCount: 0, totalCount: 0,
     });
     const sessionId = (sr as any).insertId;
 
     runningDiscovers.set(sessionId, false);
-    this.runSearch(sessionId, { platforms, keywords, mode, referenceId, refEmbedding })
+    this.runSearch(sessionId, { platforms, keywords, mode, referenceId, refEmbedding, perKw })
       .catch(async (e) => {
         console.error(`[discover] session ${sessionId} 失败:`, e.message);
         await db.update(schema.searchSessions).set({ status: 'failed' }).where(eq(schema.searchSessions.id, sessionId)).catch(() => {});
@@ -111,9 +114,9 @@ export class DiscoverService {
 
   // 后台：召回 → 逐张处理 → 写结果 + 进度
   private async runSearch(sessionId: number, ctx: {
-    platforms: string[]; keywords: string[]; mode: 'image' | 'tags'; referenceId: number | null; refEmbedding: number[] | null;
+    platforms: string[]; keywords: string[]; mode: 'image' | 'tags'; referenceId: number | null; refEmbedding: number[] | null; perKw: number;
   }) {
-    const { platforms, keywords, mode, referenceId, refEmbedding } = ctx;
+    const { platforms, keywords, mode, referenceId, refEmbedding, perKw } = ctx;
     const xhsCookie = process.env.XHS_COOKIE || '';
     const isAborted = () => runningDiscovers.get(sessionId) === true;
 
@@ -126,14 +129,14 @@ export class DiscoverService {
         try {
           if (platform === 'mihuashi') {
             if (!MIHUASHI_TAGS.has(kw)) { console.error(`[discover] 米画师跳过非官方标签「${kw}」（点不中、只会空跑）`); continue; }
-            const arts = await searchMihuashi(kw, PER_KW);
+            const arts = await searchMihuashi(kw, perKw);
             for (const a of arts) pool.push({ platform, imageUrl: a.imageUrl, sourceUrl: `https://www.mihuashi.com/artworks/${a.mhsId}`, title: `米画师·${kw}`, author: null, tags: [kw], allImages: [a.imageUrl] });
           } else if (platform === 'weibo') {
-            const imgs = await searchWeiboByKeyword(kw, PER_KW);
+            const imgs = await searchWeiboByKeyword(kw, perKw);
             for (const im of imgs) pool.push({ platform, imageUrl: im.url, sourceUrl: im.sourceUrl || im.url, title: im.title || `微博·${kw}`, author: im.author || null, tags: [kw], allImages: [im.url] });
           } else if (platform === 'xiaohongshu') {
             if (!xhsCookie) { console.error('[discover] 小红书未配置 XHS_COOKIE，跳过'); continue; }
-            const notes = await searchXhsByKeyword(kw, PER_KW, xhsCookie);
+            const notes = await searchXhsByKeyword(kw, perKw, xhsCookie);
             for (const n of notes) if (n.images.length) pool.push({ platform, imageUrl: n.images[0], sourceUrl: n.sourceUrl, title: n.title || kw, author: n.author || null, tags: n.xhsTags || [], allImages: n.images });
           }
         } catch (e: any) { console.error(`[discover] ${platform} "${kw}" 召回失败: ${e.message}`); }

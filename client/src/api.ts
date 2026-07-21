@@ -239,7 +239,7 @@ export type DiscoverResult = {
 };
 export type DiscoverTask = { status: string; done: number; total: number; resultCount: number; mode: 'image' | 'tags'; stats?: any };
 // 发起发现：referenceId(可选) + tags(可选 [{label}]) + platforms
-export async function startDiscover(body: { referenceId?: number | null; tags?: { label: string }[]; platforms?: string[] }): Promise<{ sessionId: number; mode: 'image' | 'tags' }> {
+export async function startDiscover(body: { referenceId?: number | null; tags?: { label: string }[]; platforms?: string[]; perKw?: number }): Promise<{ sessionId: number; mode: 'image' | 'tags' }> {
   const r = await fetch(BASE + '/discover/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   if (!r.ok) throw new Error('discover failed'); return r.json();
 }

@@ -47,6 +47,7 @@ export function DiscoverPage() {
   const [selectedRef, setSelectedRef] = useState<number | null>(null);
   const [selectedLabels, setSelectedLabels] = useState<Set<string>>(new Set());
   const [platforms, setPlatforms] = useState<Set<string>>(new Set(['mihuashi']));
+  const [perKw, setPerKw] = useState<number>(20); // 每标签每平台搜多少张（可调）
   const [sessions, setSessions] = useState<SessionMeta[]>(loadSessions);
   const [activeId, setActiveId] = useState<number | null>(() => { const s = loadSessions(); return s[s.length - 1]?.id ?? null; });
   const [viewResult, setViewResult] = useState<any>(null);
@@ -92,7 +93,7 @@ export function DiscoverPage() {
     if (!platforms.size) return;
     const labels = [...selectedLabels];
     const tags = labels.map(label => ({ label }));
-    startM.mutate({ referenceId: selectedRef, tags, platforms: [...platforms] }, { onSuccess: (r) => {
+    startM.mutate({ referenceId: selectedRef, tags, platforms: [...platforms], perKw }, { onSuccess: (r) => {
       const label = labels.length ? labels.join('+') : (selectedRef ? '参考图' : `#${r.sessionId}`);
       setSessions(prev => { const next = [...prev, { id: r.sessionId, label }]; saveSessions(next); return next; });
       setActiveId(r.sessionId);
@@ -170,7 +171,7 @@ export function DiscoverPage() {
               ))}
             </div>
 
-            {/* 平台 + 搜索 */}
+            {/* 平台 + 数量 + 搜索 */}
             <div className="flex items-center gap-3 flex-wrap mt-3">
               <div className="flex gap-1.5">
                 {PLATFORMS.map(p => {
@@ -178,6 +179,20 @@ export function DiscoverPage() {
                   return <span key={p.key} onClick={() => togglePlatform(p.key)}
                     className={`text-[12px] px-2.5 py-1 rounded-full cursor-pointer border ${on ? 'bg-stone-700 text-white border-stone-700' : 'bg-white text-stone-500 border-stone-200'}`}>{p.label}</span>;
                 })}
+              </div>
+              {/* 每标签每平台搜多少张（可调；越大越易被限流） */}
+              <div className="flex items-center gap-1.5 text-[12px] text-stone-500">
+                <span>每标签搜</span>
+                <input type="number" min={1} max={200} value={perKw}
+                  onChange={e => setPerKw(Math.min(200, Math.max(1, Math.floor(Number(e.target.value) || 1))))}
+                  className="w-16 text-center border border-stone-200 rounded-full px-2 py-1 text-stone-700" />
+                <span>张</span>
+                <span className="flex gap-1">
+                  {[20, 50, 100].map(n => (
+                    <span key={n} onClick={() => setPerKw(n)}
+                      className={`px-1.5 py-0.5 rounded-full cursor-pointer border text-[11px] ${perKw === n ? 'bg-xhs text-white border-xhs' : 'bg-white text-stone-400 border-stone-200 hover:border-xhs'}`}>{n}</span>
+                  ))}
+                </span>
               </div>
               <button onClick={doSearch} disabled={startM.isPending || (!selectedRef && !selectedLabels.size) || !platforms.size}
                 className="text-[13px] bg-xhs text-white rounded-full px-5 py-2 font-medium disabled:opacity-40">

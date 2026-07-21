@@ -9,7 +9,7 @@ export class DiscoverController {
 
   // 发起搜索：POST /api/discover/start {referenceId?, tags?:[{label}], platforms}
   @Post('start')
-  start(@Body() body: { referenceId?: number | null; tags?: { label: string }[]; platforms?: string[] }) {
+  start(@Body() body: { referenceId?: number | null; tags?: { label: string }[]; platforms?: string[]; perKw?: number }) {
     return this.discoverService.start(body);
   }
 
