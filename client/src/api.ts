@@ -22,6 +22,14 @@ export type Artist = {
 
 const BASE = '/api';
 
+// 外站图（微博 sinaimg / 小红书 xhscdn 等）有防盗链，浏览器 <img> 直连会 403。
+// 统一走后端代理带 Referer 取回。本地图（/uploads 或相对路径）与已代理的原样返回。
+export function proxyImg(url?: string | null): string {
+  if (!url) return '';
+  if (!/^https?:\/\//.test(url)) return url;   // 本地 /uploads、相对路径
+  return `${BASE}/img?u=${encodeURIComponent(url)}`;
+}
+
 export async function fetchTags(): Promise<TagNode[]> {
   const r = await fetch(BASE + '/tags');
   if (!r.ok) throw new Error('tags failed');

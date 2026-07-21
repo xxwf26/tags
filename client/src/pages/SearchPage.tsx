@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { SearchResult } from '../api';
 import { useReferences, useUploadReference, useUpdateReferenceTags, useStartSearch, useSearchSessions, useSearchResults, useReviewSearchResult, usePromoteSearchResult, useRejectSearchResult, useDeleteReference, useTags } from '../hooks';
-import { tagsByTopDim } from '../api';
+import { tagsByTopDim, proxyImg } from '../api';
 const BASE = '/api';
 const SEARCH_REF_KEY = 'search:ref';
 const SEARCH_SESSION_KEY = 'search:session';
@@ -354,7 +354,7 @@ export function SearchPage() {
               return (
                 <div key={r.id} className="mb-2.5 break-inside-avoid bg-white rounded-xl overflow-hidden border border-stone-100 card-hover">
                   <div className="relative cursor-pointer" onClick={() => setViewResult(r)}>
-                    <img src={r.imageUrl || ''} referrerPolicy="no-referrer" className="w-full object-cover" alt="" style={{ aspectRatio: '3/4' }} onError={e => ((e.target as HTMLImageElement).style.opacity = '0.3')} />
+                    <img src={proxyImg(r.imageUrl)} className="w-full object-cover" alt="" style={{ aspectRatio: '3/4' }} onError={e => ((e.target as HTMLImageElement).style.opacity = '0.3')} />
                     {(r as any).similarity != null && <span className="absolute top-2 left-2 text-[10px] px-1.5 py-0.5 rounded bg-violet-600 text-white">似 {Math.round((r as any).similarity * 100)}%</span>}
                     {r.isNew ? <span className="absolute top-2 left-2 text-[10px] px-1.5 py-0.5 rounded bg-xhs text-white" style={{ left: (r as any).similarity != null ? '3.5rem' : '0.5rem' }}>NEW</span> : null}
                     {allImgs.length > 1 && <span className="absolute top-2 right-2 text-[10px] px-1.5 py-0.5 rounded bg-black/50 text-white">📊{allImgs.length}张</span>}
@@ -401,7 +401,7 @@ export function SearchPage() {
             <div className="flex-1 overflow-y-auto flex justify-center p-3 md:p-6" onClick={() => { setViewResult(null); setViewImgIdx(0); }}>
               <div className="my-auto flex flex-col items-center gap-3" onClick={e => e.stopPropagation()}>
                 <div className="relative">
-                  <img src={img} referrerPolicy="no-referrer" className="max-h-[72vh] max-w-full rounded-xl object-contain shadow-2xl" alt="" />
+                  <img src={proxyImg(img)} className="max-h-[72vh] max-w-full rounded-xl object-contain shadow-2xl" alt="" />
                   {allImgs.length > 1 && <button onClick={() => setViewImgIdx(i => (i - 1 + allImgs.length) % allImgs.length)} className="absolute left-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/45 text-white text-xl hover:bg-xhs">‹</button>}
                   {allImgs.length > 1 && <button onClick={() => setViewImgIdx(i => (i + 1) % allImgs.length)} className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/45 text-white text-xl hover:bg-xhs">›</button>}
                 </div>

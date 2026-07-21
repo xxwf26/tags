@@ -9,8 +9,9 @@ import { ReferenceModule } from './modules/reference/reference.module.js';
 import { SearchModule } from './modules/search/search.module.js';
 import { SettingsModule } from './modules/settings/settings.module.js';
 import { DiscoverModule } from './modules/discover/discover.module.js';
+import { ImageProxyModule } from './modules/image-proxy/image-proxy.module.js';
 
 @Module({
-  imports: [TagModule, ArtworkModule, ArtistModule, TaggingModule, CandidateModule, OperationModule, ReferenceModule, SearchModule, SettingsModule, DiscoverModule],
+  imports: [TagModule, ArtworkModule, ArtistModule, TaggingModule, CandidateModule, OperationModule, ReferenceModule, SearchModule, SettingsModule, DiscoverModule, ImageProxyModule],
 })
 export class AppModule {}

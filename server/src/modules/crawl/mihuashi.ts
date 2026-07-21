@@ -138,8 +138,12 @@ export async function fetchMihuashiTags(): Promise<{ id: number; name: string; t
 // 比在页面上点标签按钮稳得多（类型标签藏在未展开下拉里，点不中）。43 个标签基本不变，进程内缓存即可。
 let _tagMap: Map<string, number> | null = null;
 async function getTagIdMap(): Promise<Map<string, number>> {
-  if (_tagMap) return _tagMap;
+  if (_tagMap && _tagMap.size) return _tagMap;   // 已有非空缓存才复用
   const tags = await fetchMihuashiTags();
+  // ⚠️ 拉标签失败（冷启动被反爬拦 / 限流 → 返回空）时绝不缓存空 map。
+  // 否则空 map 会被永久缓存，之后每次搜索 tagId 都是 undefined → _searchMihuashi 直接空跑返回 0，
+  // 表现为「搜索秒结束、0 结果」，且要重启后端才恢复。返回临时空 map，让下次调用重新拉。
+  if (!tags.length) { console.error('[mihuashi] 标签映射拉取为空，不缓存，下次调用将重试'); return new Map(); }
   _tagMap = new Map(tags.map(t => [t.name, t.id]));
   return _tagMap;
 }

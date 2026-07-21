@@ -130,7 +130,7 @@ export class DiscoverService {
             for (const a of arts) pool.push({ platform, imageUrl: a.imageUrl, sourceUrl: `https://www.mihuashi.com/artworks/${a.mhsId}`, title: `米画师·${kw}`, author: null, tags: [kw], allImages: [a.imageUrl] });
           } else if (platform === 'weibo') {
             const imgs = await searchWeiboByKeyword(kw, PER_KW);
-            for (const im of imgs) pool.push({ platform, imageUrl: im.url, sourceUrl: im.url, title: im.title || `微博·${kw}`, author: null, tags: [kw], allImages: [im.url] });
+            for (const im of imgs) pool.push({ platform, imageUrl: im.url, sourceUrl: im.sourceUrl || im.url, title: im.title || `微博·${kw}`, author: im.author || null, tags: [kw], allImages: [im.url] });
           } else if (platform === 'xiaohongshu') {
             if (!xhsCookie) { console.error('[discover] 小红书未配置 XHS_COOKIE，跳过'); continue; }
             const notes = await searchXhsByKeyword(kw, PER_KW, xhsCookie);

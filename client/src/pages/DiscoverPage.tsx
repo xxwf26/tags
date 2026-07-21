@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useReferences, useUploadReference, useStartDiscover, useDiscoverSessions, useDiscoverResults, useDiscoverSessionsList, useReviewDiscover, usePromoteDiscover, useRejectDiscover, useDeleteReference, useAbortDiscover } from '../hooks';
+import { proxyImg } from '../api';
 
 const PLATFORMS = [
   { key: 'mihuashi', label: '米画师' },
@@ -262,7 +263,7 @@ export function DiscoverPage() {
             {results.map(r => (
               <div key={r.id} className="mb-2.5 break-inside-avoid bg-white rounded-xl overflow-hidden border border-stone-100 card-hover">
                 <div className="relative cursor-zoom-in" onClick={() => { setViewResult(r); setViewIdx(0); }}>
-                  <img src={r.imageUrl || ''} referrerPolicy="no-referrer" className="w-full object-cover" style={{ aspectRatio: '3/4' }}
+                  <img src={proxyImg(r.imageUrl)} className="w-full object-cover" style={{ aspectRatio: '3/4' }}
                     onError={e => ((e.target as HTMLImageElement).style.opacity = '0.3')} alt="" />
                   {r.quality != null
                     ? <span className="absolute top-2 left-2 text-[10px] px-1.5 py-0.5 rounded bg-black/50 text-white">质 {r.quality.toFixed(0)}</span>
@@ -301,7 +302,7 @@ export function DiscoverPage() {
           <div className="flex-1 overflow-y-auto flex justify-center p-3 md:p-6" onClick={() => setViewResult(null)}>
             <div className="my-auto flex flex-col items-center gap-3" onClick={e => e.stopPropagation()}>
               <div className="relative">
-                <img src={viewImgs[viewIdx]} referrerPolicy="no-referrer" className="max-h-[74vh] max-w-full rounded-xl object-contain shadow-2xl" alt="" />
+                <img src={proxyImg(viewImgs[viewIdx])} className="max-h-[74vh] max-w-full rounded-xl object-contain shadow-2xl" alt="" />
                 {viewImgs.length > 1 && <button onClick={() => setViewIdx(i => (i - 1 + viewImgs.length) % viewImgs.length)} className="absolute left-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/45 text-white text-xl hover:bg-xhs">‹</button>}
                 {viewImgs.length > 1 && <button onClick={() => setViewIdx(i => (i + 1) % viewImgs.length)} className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/45 text-white text-xl hover:bg-xhs">›</button>}
               </div>

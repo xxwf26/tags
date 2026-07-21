@@ -80,10 +80,16 @@ export async function searchWeiboByKeyword(keyword: string, limit = 15): Promise
       for (const c of data.data.cards) {
         const mb = c.mblog;
         if (!mb?.pics?.length) continue;
+        const author = mb.user?.screen_name || undefined;
         for (const pic of mb.pics) {
           const url = pic.large?.url || pic.url;
           if (url && !items.find(x => x.url === url)) {
-            items.push({ url, noteId: mb.id, title: String(mb.text || '').replace(/<[^>]+>/g, '').slice(0, 60) });
+            items.push({
+              url, noteId: mb.id, author,
+              // 微博原帖页（可点回溯来源），而非图片直链
+              sourceUrl: mb.id ? `https://m.weibo.cn/status/${mb.id}` : undefined,
+              title: String(mb.text || '').replace(/<[^>]+>/g, '').slice(0, 60),
+            });
             if (items.length >= limit) break;
           }
         }
