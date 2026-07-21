@@ -6,7 +6,7 @@ module.exports = {
     cwd: __dirname,
     script: 'dist/main.js',
     env: { NODE_ENV: 'production', PORT: '3323' },
-    max_memory_restart: '500M',
+    max_memory_restart: '1G',
     autorestart: true,
     max_restarts: 10,
   }],
