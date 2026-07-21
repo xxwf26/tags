@@ -5,7 +5,7 @@
 import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { join, basename } from 'node:path';
 import { db, schema } from '../../database/db.js';
-import { eq, and, desc, isNotNull } from 'drizzle-orm';
+import { eq, and, desc, isNotNull, inArray } from 'drizzle-orm';
 import { searchMihuashi } from '../crawl/mihuashi.js';
 import { searchXhsByKeyword, downloadImage } from '../crawl/xhs.js';
 import { searchWeiboByKeyword } from '../crawl/weibo.js';
@@ -238,8 +238,10 @@ export class DiscoverService {
 
   // 历史会话列表：发现 session（mode 非空；寻源 session 的 mode 为 null 不会列出），最新在前
   async listSessions(limit = 30) {
+    // 只列发现 session（mode='tags' 或 'image'）。不能用 mode IS NOT NULL——
+    // MySQL 的 mode 列 DEFAULT 'tags'，寻源 session 不设 mode 会被默认填 'tags' 混进来。
     const rows = await db.select().from(schema.searchSessions)
-      .where(isNotNull(schema.searchSessions.mode))
+      .where(inArray(schema.searchSessions.mode, ['tags', 'image']))
       .orderBy(desc(schema.searchSessions.id)).limit(limit);
     return rows.map((s: any) => ({
       id: s.id, mode: s.mode, status: s.status, resultCount: s.resultCount ?? 0,
