@@ -1,6 +1,9 @@
 // 独立子进程：用 playwright 搜小红书，输出 JSON 到 stdout
 // 用法：node xhs-search.mjs <keywords逗号分隔> <cookie> <limit>
+// 优先用 storageState（扫码登录保存的完整浏览器状态），比纯 cookie 稳——小红书不软封锁。
 import { chromium } from 'playwright';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 
 const keywords = process.argv[2].split(',');
 const cookieStr = process.argv[3];
@@ -9,12 +12,21 @@ const limit = Number(process.argv[4]) || 300;
 const AD_KEYWORDS = ['开课','摆摊','发布会','报名','课程','招生','培训','兼职','招聘','众筹','预售','下单','购买','淘宝','拼多多','闲鱼','微店','链接','优惠','折扣','活动','抽奖','转发','关注我','求关注','互粉'];
 
 const b = await chromium.launch({ headless: true, args: ['--no-sandbox','--disable-gpu','--disable-dev-shm-usage'] });
-const cookies = cookieStr.split('; ').map(c => { const [name,...r] = c.split('='); return { name, value: r.join('='), domain: '.xiaohongshu.com', path: '/' }; });
-const ctx = await b.newContext({
+// 优先用 storageState（扫码登录保存的），否则回退到 addCookies
+const authPath = join(process.cwd(), '.xhs-auth.json');
+const ctxOpts = {
   userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
   viewport: { width: 1440, height: 900 }, locale: 'zh-CN',
-});
-await ctx.addCookies(cookies);
+};
+if (existsSync(authPath)) {
+  ctxOpts.storageState = authPath;
+}
+const ctx = await b.newContext(ctxOpts);
+// 如果没有 storageState，回退到 addCookies
+if (!existsSync(authPath) && cookieStr) {
+  const cookies = cookieStr.split('; ').map(c => { const [name,...r] = c.split('='); return { name, value: r.join('='), domain: '.xiaohongshu.com', path: '/' }; });
+  await ctx.addCookies(cookies);
+}
 
 const items = [];
 const seen = new Set();

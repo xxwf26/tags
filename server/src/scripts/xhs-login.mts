@@ -2,6 +2,7 @@
 // 用法：node --import tsx xhs-login.mts
 // 输出 JSON 到 stdout：{ success: true, cookie: "..." } 或 { success: false, error: "..." }
 import { chromium } from 'playwright';
+import { join } from 'node:path';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
@@ -38,7 +39,11 @@ try {
   if (loggedIn) {
     const cookies = await ctx.cookies();
     const cookieStr = cookies.map(c => `${c.name}=${c.value}`).join('; ');
-    console.error(`[xhs-login] 登录成功，获取 ${cookies.length} 个cookie，长度=${cookieStr.length}`);
+    // 保存完整浏览器状态（cookie + localStorage）供 xhs-search.mjs 复用——比纯 cookie 稳，
+    // 小红书会认为是同一个登录会话，不会软封锁搜索 API。
+    const authPath = join(process.cwd(), '.xhs-auth.json');
+    await ctx.storageState({ path: authPath });
+    console.error(`[xhs-login] 登录成功，${cookies.length} 个cookie，storageState 已保存到 ${authPath}`);
     console.log(JSON.stringify({ success: true, cookie: cookieStr }));
   } else {
     console.error('[xhs-login] 登录超时');
