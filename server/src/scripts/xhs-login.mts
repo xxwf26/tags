@@ -13,7 +13,7 @@ await ctx.addInitScript(() => { Object.defineProperty(navigator, 'webdriver', { 
 const p = await ctx.newPage();
 
 try {
-  await p.goto('https://www.xiaohongshu.com/', { waitUntil: 'networkidle', timeout: 30000 });
+  await p.goto('https://www.xiaohongshu.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
   await p.waitForTimeout(2000);
 
   // 点"登录"按钮（如果未登录）
