@@ -211,8 +211,11 @@ export class SearchService {
             progressTotal += imgs.length;
             await db.update(schema.searchSessions).set({ searchTags: { tags: body.tags, fuzzyRatio, progress: { total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString() } } }).where(eq(schema.searchSessions.id, sessionId));
             let kept = 0, skipNotArt = 0, skipDup = 0, skipLowQ = 0;
+            const seenNoteIds = new Set<string>(); // 同一微博帖子只保留第一张图，避免多图帖子刷屏重复
             for (const im of imgs) {
               if (isAborted()) { console.log(`[search] session ${sessionId} 已终止（已处理 ${progressProcessed} 张）`); break; }
+              if (im.noteId && seenNoteIds.has(im.noteId)) { continue; } // 同帖去重
+              if (im.noteId) seenNoteIds.add(im.noteId);
               progressProcessed++;
               let isArtwork = false;
               let quality = 0;
@@ -249,13 +252,13 @@ export class SearchService {
                 if (!skipped && similarity !== null && similarity < SIM_FLOOR) { skipLowQ++; continue; }
               }
               kept++;
-              const dedupKey = im.url;
-              const isNew = !prevUrls.has(dedupKey) && !prevHashes.has(im.url);
+              const sourceUrl = im.sourceUrl || (im.noteId ? `https://m.weibo.cn/status/${im.noteId}` : im.url);
+              const isNew = !prevUrls.has(sourceUrl) && !prevHashes.has(im.url);
               await db.insert(schema.searchResults).values({
                 sessionId,
                 referenceImageId: body.referenceId,
                 platform: 'weibo',
-                sourceUrl: im.url,
+                sourceUrl,
                 imageUrl: im.url,
                 allImages: [im.url],
                 imageHash: imageHash || null,
