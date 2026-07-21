@@ -4,6 +4,8 @@
 // 返回假的"签名错误"403。必须用反检测参数 + 抹掉 webdriver 标志才能过。
 // 共享浏览器实例，避免反复启动。
 import { chromium, type Browser, type BrowserContext } from 'playwright';
+import { execFile } from 'node:child_process';
+import { join } from 'node:path';
 
 export type MhsArtwork = { mhsId: number; imageUrl: string; width: number | null; height: number | null; author: string | null; authorUrl: string | null };
 
@@ -60,78 +62,47 @@ function withMhsLock<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 export async function searchMihuashi(tagName: string, limit = 30): Promise<MhsArtwork[]> {
-  // 串行 + 冷启动重试1次：第一个调用（冷浏览器）偶发被挡返回0，重试1次（热浏览器）即可。
-  // 不多重试——连续搜索会被米画师限流返回0或chromium segfault拖垮进程，多重试反而更崩。
-  // 被限流返回0时只能等一会儿再搜，不要立即狂重试。
-  const arts = await withMhsLock(() => _searchMihuashi(tagName, limit));
-  if (!arts.length) { await new Promise(r => setTimeout(r, 2000)); return withMhsLock(() => _searchMihuashi(tagName, limit)); }
-  return arts;
-}
-
-async function _searchMihuashi(tagName: string, limit = 30): Promise<MhsArtwork[]> {
-  // 把标签名转成 tag id，直接用 ?tags={id} 导航（画风/类型标签统一走这条路，不再点 DOM）
+  // 走独立子进程（src/scripts/mhs-search.mts）：米画师 chromium 在 Windows 反复用会原生 segfault，
+  // 子进程隔离后 segfault 只杀子进程，主服务不受影响。tagName→tagId 在主进程查（缓存的 getTagIdMap），
+  // tagId(数字)走 argv 传给子进程（无中文编码问题）。串行锁 + 冷启动重试1次。
   const idMap = await getTagIdMap();
   const tagId = idMap.get(tagName);
   if (!tagId) { console.error(`[mihuashi] 未知标签「${tagName}」（不在米画师 43 个官方标签内）`); return []; }
 
-  let ctx: BrowserContext | null = null;
-  const arts: MhsArtwork[] = [];
-  const seen = new Set<number>();
-  try {
-    const b = await getBrowser();
-    ctx = await stealthContext(b);
-    const p = await ctx.newPage();
-    p.on('response', async r => {
-      if (r.url().includes('/api/v1/artworks/search')) {
-        try {
-          const j = JSON.parse(await r.text());
-          for (const a of j.artworks || []) {
-            if (a.id && !seen.has(a.id)) {
-              seen.add(a.id);
-              const { author, authorUrl } = extractAuthor(a);
-              arts.push({ mhsId: a.id, imageUrl: a.url, width: a.width ?? null, height: a.height ?? null, author, authorUrl });
-            }
-          }
-        } catch {}
-      }
+  const scriptPath = join(process.cwd(), 'src', 'scripts', 'mhs-search.mts');
+  const runOnce = (): Promise<MhsArtwork[]> => new Promise((resolve) => {
+    // 用 execFile（同 xhs-search 模式）：避免 spawn+setTimeout 在 Node24 Windows 触发 libuv 句柄竞争崩溃
+    execFile(process.execPath, ['--import', 'tsx', scriptPath, String(tagId), String(limit)], {
+      maxBuffer: 50 * 1024 * 1024, timeout: 120000, windowsHide: true,
+    }, (err: any, stdout: any) => {
+      if (err) { console.error(`[mhs] 子进程搜索 "${tagName}" 失败: ${err.message}`); resolve([]); return; }
+      try { resolve((JSON.parse(stdout).arts || []) as MhsArtwork[]); }
+      catch { resolve([]); }
     });
-    // 带标签直接进筛选后的列表页；order=1 最新，tags={id} 指定画风/类型
-    await p.goto(`https://www.mihuashi.com/artworks?order=1&tags=${tagId}`, { waitUntil: 'networkidle', timeout: 45000 });
-    await p.waitForTimeout(2000);
-    for (let i = 0; i < 25 && arts.length < limit; i++) {
-      await p.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-      await p.waitForTimeout(1500);
-    }
-  } catch (e: any) {
-    // 浏览器断开/超时/导航异常：返回已收集的，不抛（避免拖垮进程）
-    console.error(`[mihuashi] "${tagName}" 搜索异常: ${e.message}`);
-  } finally {
-    if (ctx) try { await ctx.close(); } catch {}
-  }
-  return arts.slice(0, limit);
+  });
+
+  const arts = await withMhsLock(runOnce);
+  if (!arts.length) { await new Promise(r => setTimeout(r, 2000)); return withMhsLock(runOnce); }
+  return arts;
 }
 
-// 拉米画师可用画风标签（供前端下拉）
+// 拉米画师可用画风标签（供前端下拉 + getTagIdMap）。走子进程 mhs-tags.mts：chromium segfault 只杀子进程不拖垮主服务。
+// 进程内缓存 10 分钟。
+let _tagsCache: { data: { id: number; name: string; type: string }[]; ts: number } | null = null;
+const TAGS_TTL = 10 * 60 * 1000;
 export async function fetchMihuashiTags(): Promise<{ id: number; name: string; type: string }[]> {
-  let ctx: BrowserContext | null = null;
-  let tags: any[] = [];
-  try {
-    const b = await getBrowser();
-    ctx = await stealthContext(b);
-    const p = await ctx.newPage();
-    p.on('response', async r => {
-      if (r.url().includes('/api/v1/configure/artwork_tags')) {
-        try { const j = JSON.parse(await r.text()); tags = j.artwork_tags || []; } catch {}
-      }
+  if (_tagsCache && Date.now() - _tagsCache.ts < TAGS_TTL) return _tagsCache.data;
+  const scriptPath = join(process.cwd(), 'src', 'scripts', 'mhs-tags.mts');
+  const data: { id: number; name: string; type: string }[] = await new Promise((resolve) => {
+    execFile(process.execPath, ['--import', 'tsx', scriptPath], {
+      maxBuffer: 10 * 1024 * 1024, timeout: 90000, windowsHide: true,
+    }, (err: any, stdout: any) => {
+      if (err) { console.error(`[mhs] 拉标签子进程失败: ${err.message}`); resolve([]); return; }
+      try { resolve(JSON.parse(stdout)); } catch { resolve([]); }
     });
-    await p.goto('https://www.mihuashi.com/artworks?order=1', { waitUntil: 'networkidle', timeout: 45000 });
-    await p.waitForTimeout(1500);
-  } catch (e: any) {
-    console.error(`[mihuashi] 拉标签异常: ${e.message}`);
-  } finally {
-    if (ctx) try { await ctx.close(); } catch {}
-  }
-  return tags;
+  });
+  if (data.length) _tagsCache = { data, ts: Date.now() };
+  return data;
 }
 
 // 标签名 → tag id 的缓存映射。米画师用 ?tags={id} 参数筛选（画风 skill_tag + 类型 art_category_tag 共用同一套 id），
