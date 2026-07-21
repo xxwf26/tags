@@ -107,14 +107,28 @@ export async function fetchMihuashiTags(): Promise<{ id: number; name: string; t
 
 // 标签名 → tag id 的缓存映射。米画师用 ?tags={id} 参数筛选（画风 skill_tag + 类型 art_category_tag 共用同一套 id），
 // 比在页面上点标签按钮稳得多（类型标签藏在未展开下拉里，点不中）。43 个标签基本不变，进程内缓存即可。
+// 硬编码兜底：子进程拉标签失败（chromium 崩/超时/反爬）时用这套映射，不让搜索因映射空而全挂。
+const FALLBACK_TAG_MAP: Record<string, number> = {
+  // 画风（skill_tag）
+  '日系': 3, '平涂': 44, '萌系': 164, '厚涂': 16, '赛璐璐': 1, '古风': 70, '中国风': 166,
+  '童趣': 940, '写实系': 9136, '韩系': 382, '少女漫画': 1391, '欧美系': 9645, '水彩': 80,
+  '美式卡通': 161, '白描': 795, '科幻风': 11346, '像素风': 953, '水墨': 192, '硬派': 2390,
+  // 类型（art_category_tag）
+  '头像': 8, '插图': 134, 'Q版': 51, '自设/OC': 11348, '立绘': 68, '角色设计': 313,
+  '壁纸': 337, '封面': 187, '场景': 46, '海报': 126, '概念设计': 674, '印花': 593,
+  '图标': 938, 'Live2D': 5006, 'CG': 106, '和纸胶带': 231, '像素图': 1719, '卡牌': 432,
+  '条漫': 37, 'UI': 937, '版型': 11345, '分镜': 811, '抱枕': 11347, '特效': 3001,
+};
 let _tagMap: Map<string, number> | null = null;
 async function getTagIdMap(): Promise<Map<string, number>> {
   if (_tagMap && _tagMap.size) return _tagMap;   // 已有非空缓存才复用
   const tags = await fetchMihuashiTags();
-  // ⚠️ 拉标签失败（冷启动被反爬拦 / 限流 → 返回空）时绝不缓存空 map。
-  // 否则空 map 会被永久缓存，之后每次搜索 tagId 都是 undefined → _searchMihuashi 直接空跑返回 0，
-  // 表现为「搜索秒结束、0 结果」，且要重启后端才恢复。返回临时空 map，让下次调用重新拉。
-  if (!tags.length) { console.error('[mihuashi] 标签映射拉取为空，不缓存，下次调用将重试'); return new Map(); }
+  if (!tags.length) {
+    // 拉标签失败（冷启动被反爬拦/限流/chromium 崩）→ 用硬编码兜底，不让搜索全挂
+    console.error('[mihuashi] 标签映射拉取为空，用硬编码兜底');
+    _tagMap = new Map(Object.entries(FALLBACK_TAG_MAP));
+    return _tagMap;
+  }
   _tagMap = new Map(tags.map(t => [t.name, t.id]));
   return _tagMap;
 }
