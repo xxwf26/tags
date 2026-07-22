@@ -170,6 +170,24 @@ export function SearchPage() {
       onSuccess: (r) => { setActiveSession(r.sessionId); refetchSessions(); },
     });
   };
+  // 继续搜索更多：用非 genre 标签做关键词搜（找不同帖子），所有标签都做过滤（确保兼具）
+  const doContinueSearch = async () => {
+    if (!selectedRef) return;
+    const allTags: { id: number; label: string; dimensionId: number }[] = [];
+    for (const top of (tagsQ.data ?? [])) {
+      for (const t of top.tags) allTags.push({ id: t.id, label: t.label, dimensionId: top.id });
+      for (const sub of top.children) {
+        for (const t of sub.tags) allTags.push({ id: t.id, label: t.label, dimensionId: sub.id });
+      }
+    }
+    const tags = selectedIds.map(id => {
+      const t = allTags.find(a => a.id === id);
+      return { tagId: id, label: t?.label ?? '', dimensionId: t?.dimensionId ?? null, mode: tagModes[id] };
+    });
+    startSearchM.mutate({ referenceId: selectedRef, tags, platforms: [...platforms], fuzzyRatio, keywordMode: 'all' }, {
+      onSuccess: (r) => { setActiveSession(r.sessionId); refetchSessions(); },
+    });
+  };
 
   const results = resultsQ.data ?? [];
 
@@ -291,6 +309,12 @@ export function SearchPage() {
                   <button onClick={() => {
                     fetch(BASE + '/search/abort/' + activeSession, { method: 'POST' }).then(() => refetchSessions());
                   }} className="text-[12px] text-rose-500 border border-rose-300 rounded-full px-3 py-1.5 hover:bg-rose-50">⏹ 终止</button>
+                )}
+                {!running && activeData && selectedIds.length > 0 && (
+                  <button onClick={doContinueSearch} disabled={startSearchM.isPending}
+                    className="text-[12px] bg-violet-600 text-white rounded-full px-3 py-1.5 font-medium disabled:opacity-40">
+                    {startSearchM.isPending ? '发起中…' : '🔍 继续搜索更多'}
+                  </button>
                 )}
                 {(refsQ.data ?? []).length > 1 && (
                   <button onClick={() => setShowMerge(!showMerge)}

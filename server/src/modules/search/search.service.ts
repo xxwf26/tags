@@ -30,10 +30,11 @@ export class SearchService {
 
   // 发起搜索：创建 session → 各平台搜索 → 存结果 → 标记 isNew
   // tags 支持 mode: 'must'(必中，用作搜索关键词) | 'fuzzy'(模糊，达到比例即满足)
+  // keywordMode: 'genre'(默认,只用画风标签搜) | 'all'(继续搜索:用所有标签搜,找不同帖子)
   async startSearch(body: {
     referenceId: number;
     tags: { tagId: number; label: string; dimensionId: number | null; mode: 'must' | 'fuzzy' }[];
-    platforms?: string[]; fuzzyRatio?: number;
+    platforms?: string[]; fuzzyRatio?: number; keywordMode?: 'genre' | 'all';
   }) {
     // 先创建 session 返回 sessionId，后台异步执行搜索
     const prevSessions = await db.select().from(schema.searchSessions)
@@ -82,6 +83,7 @@ export class SearchService {
     const settingsSvc = new SettingsService();
     const xhsCookie = await settingsSvc.getXhsCookie();
     const fuzzyRatio = body.fuzzyRatio ?? 0.5;
+    const keywordMode = body.keywordMode ?? 'genre';
 
     // 加载维度表，解析每个标签的顶层 code（genre/technique/...）
     const dims = await db.select().from(schema.tagDimensions);
@@ -93,10 +95,19 @@ export class SearchService {
       return d?.code ?? '';
     };
 
-    // 必中的 genre 画风标签 → 搜索关键词；没有必中 genre 则用所有 genre 标签
+    // 搜索关键词：默认只用 genre 画风标签；keywordMode='all' 时用所有标签（继续搜索，找不同帖子）
     const mustGenreTags = body.tags.filter((t: any) => t.mode === 'must' && rootCodeOf(t.dimensionId) === 'genre');
     const allGenreTags = body.tags.filter((t: any) => rootCodeOf(t.dimensionId) === 'genre');
-    const searchKeywords = (mustGenreTags.length ? mustGenreTags : allGenreTags).map((t: any) => t.label);
+    const genreKeywords = (mustGenreTags.length ? mustGenreTags : allGenreTags).map((t: any) => t.label);
+    const nonGenreKeywords = body.tags.filter((t: any) => rootCodeOf(t.dimensionId) !== 'genre').map((t: any) => t.label);
+    // 继续搜索：用非 genre 标签作为关键词（之前没用过的），genre 标签转为过滤条件
+    const searchKeywords = keywordMode === 'all' && nonGenreKeywords.length
+      ? nonGenreKeywords
+      : genreKeywords;
+    // keywordMode='all' 时，genre 标签也加入过滤（确保结果兼具画风+其他维度）
+    const filterTags = keywordMode === 'all'
+      ? body.tags.map((t: any) => t.label)  // 所有标签都过滤
+      : body.tags.filter((t: any) => rootCodeOf(t.dimensionId) !== 'genre').map((t: any) => t.label); // 默认：只过滤非 genre
     // 非 genre 标签 → 搜索后 AI 打标 + 过滤（兼具多个标签，而非 A+B 独立搜）
     // fuzzyRatio 控制严格度：1.0=必须全部命中，0.5=至少命中一半
     const filterTags = body.tags.filter((t: any) => rootCodeOf(t.dimensionId) !== 'genre').map((t: any) => t.label);
