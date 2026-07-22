@@ -41,7 +41,7 @@ export class SearchService {
     runningSearches.set(sessionId, false);
     // 标记为 running（前端看到进度）
     await db.update(schema.searchSessions).set({ status: 'running', doneCount: 0, totalCount: 0 }).where(eq(schema.searchSessions.id, sessionId));
-    this.executeSearch(sessionId, { referenceId, tags, platforms, fuzzyRatio, keywordMode: 'all' }, null).catch(e => {
+    this.executeSearch(sessionId, { referenceId, tags, platforms, fuzzyRatio, keywordMode: 'all' }, null, null).catch(e => {
       console.error(`[search] 继续搜索 session ${sessionId} 失败: ${e.message}`);
       db.update(schema.searchSessions).set({ status: 'failed' }).where(eq(schema.searchSessions.id, sessionId)).then(() => {});
     }).finally(() => { runningSearches.delete(sessionId); });
