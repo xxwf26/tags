@@ -341,9 +341,14 @@ export function DiscoverPage() {
             {(historyQ.data ?? []).map(h => {
               const inTabs = sessions.some(s => s.id === h.id);
               const st = h.status || 'running';
+              // 兼容标签元素为字符串或 {label} 对象（防遗留数据渲染成 [object Object]）
+              const tagText = Array.isArray(h.tags)
+                ? h.tags.map((t: any) => typeof t === 'string' ? t : t?.label).filter(Boolean).join('+')
+                : '';
+              const title = tagText || `#${h.id}`;
               return (
-                <div key={h.id} className={`flex items-center gap-2 border rounded-lg p-2 cursor-pointer transition-colors ${activeId === h.id ? 'border-xhs bg-xhs-soft/30' : 'border-stone-200 hover:border-stone-300'}`} onClick={() => reopenSession(h.id, h.tags?.join('+') || `#${h.id}`)}>
-                  <span className="text-[12px] text-stone-700 flex-1 min-w-0 truncate">{h.tags?.join('+') || `#${h.id}`}{h.mode === 'image' ? ' · 参考图' : ''}</span>
+                <div key={h.id} className={`flex items-center gap-2 border rounded-lg p-2 cursor-pointer transition-colors ${activeId === h.id ? 'border-xhs bg-xhs-soft/30' : 'border-stone-200 hover:border-stone-300'}`} onClick={() => reopenSession(h.id, title)}>
+                  <span className="text-[12px] text-stone-700 flex-1 min-w-0 truncate">{title}{h.mode === 'image' ? ' · 参考图' : ''}</span>
                   <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${STATUS_BADGE[st] || ''}`}>{STATUS_TEXT[st] || st}</span>
                   <span className="text-[10px] text-stone-400">{h.resultCount} 张</span>
                   <span className="text-[10px] text-stone-300 hidden md:inline">{new Date(h.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>

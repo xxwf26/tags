@@ -327,8 +327,11 @@ export function SearchPage() {
           </div>
           <div className="space-y-2">
             {sessions.map((s, i) => {
-              const tags = (s.searchTags as any)?.tags ?? s.searchTags ?? [];
-              const tagLabels = Array.isArray(tags) ? tags.map((t: any) => t.label).filter(Boolean) : [];
+              const rawTags = (s.searchTags as any)?.tags ?? s.searchTags ?? [];
+              // 兼容两种历史结构：寻源写 [{label,mode,...}]，发现写 ["日系",...]（同表 source 混存的遗留）
+              const tagItems: { label: string; mode?: string }[] = Array.isArray(rawTags)
+                ? rawTags.map((t: any) => typeof t === 'string' ? { label: t } : { label: t?.label, mode: t?.mode }).filter((t: any) => t.label)
+                : [];
               const ratio = (s.searchTags as any)?.fuzzyRatio;
               return (
                 <div key={s.id} className={`border rounded-lg p-3 cursor-pointer transition-colors relative group ${activeSession === s.id ? 'border-xhs bg-xhs-soft/30' : 'border-stone-200 hover:border-stone-300'}`}
@@ -344,10 +347,9 @@ export function SearchPage() {
                     <span className="text-[12px] text-stone-500">{s.resultCount} 张结果</span>
                   </div>
                   <div className="flex gap-1 flex-wrap mt-1.5">
-                    {tagLabels.map((label: string, j: number) => {
-                      const tagMode = tags[j]?.mode;
-                      return <span key={j} className={`text-[10px] px-1.5 py-0.5 rounded ${tagMode === 'must' ? 'bg-xhs/10 text-xhs' : 'bg-amber-100 text-amber-700'}`}>{label}{tagMode === 'must' ? '' : '·模'}</span>;
-                    })}
+                    {tagItems.map((t, j: number) => (
+                      <span key={j} className={`text-[10px] px-1.5 py-0.5 rounded ${t.mode === 'must' ? 'bg-xhs/10 text-xhs' : 'bg-amber-100 text-amber-700'}`}>{t.label}{t.mode === 'must' ? '' : '·模'}</span>
+                    ))}
                     {ratio != null && <span className="text-[10px] text-stone-400">模糊比例 {Math.round(ratio * 100)}%</span>}
                   </div>
                 </div>
