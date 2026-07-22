@@ -108,9 +108,7 @@ export class SearchService {
     const filterTags = keywordMode === 'all'
       ? body.tags.map((t: any) => t.label)  // 所有标签都过滤
       : body.tags.filter((t: any) => rootCodeOf(t.dimensionId) !== 'genre').map((t: any) => t.label); // 默认：只过滤非 genre
-    // 非 genre 标签 → 搜索后 AI 打标 + 过滤（兼具多个标签，而非 A+B 独立搜）
     // fuzzyRatio 控制严格度：1.0=必须全部命中，0.5=至少命中一半
-    const filterTags = body.tags.filter((t: any) => rootCodeOf(t.dimensionId) !== 'genre').map((t: any) => t.label);
     const requiredMatchCount = Math.ceil(filterTags.length * fuzzyRatio);
     const checkTagFilter = (aiTags: any[]): boolean => {
       if (!filterTags.length || !aiTags.length) return true; // 无过滤标签或无 AI 标签 → 放行
