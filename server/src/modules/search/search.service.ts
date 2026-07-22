@@ -28,6 +28,26 @@ export class SearchService {
     return { sessionId, aborted: true };
   }
 
+  // 继续搜索：往已有 session 加结果（不创建新记录），用非 genre 标签做关键词找不同帖子
+  async continueSearch(sessionId: number) {
+    const [session] = await db.select().from(schema.searchSessions).where(eq(schema.searchSessions.id, sessionId));
+    if (!session) throw new Error('会话不存在');
+    const tags = (session.searchTags as any)?.tags ?? [];
+    if (!tags.length) throw new Error('该会话无标签');
+    const referenceId = session.referenceImageId ?? 0;
+    const platforms = session.platforms ?? ['xiaohongshu', 'weibo'];
+    const fuzzyRatio = (session.searchTags as any)?.fuzzyRatio ?? 0.5;
+    // 复用 startSearch 但 keywordMode='all'，不用建新 session——直接改本 session 状态
+    runningSearches.set(sessionId, false);
+    // 标记为 running（前端看到进度）
+    await db.update(schema.searchSessions).set({ status: 'running', doneCount: 0, totalCount: 0 }).where(eq(schema.searchSessions.id, sessionId));
+    this.executeSearch(sessionId, { referenceId, tags, platforms, fuzzyRatio, keywordMode: 'all' }, null).catch(e => {
+      console.error(`[search] 继续搜索 session ${sessionId} 失败: ${e.message}`);
+      db.update(schema.searchSessions).set({ status: 'failed' }).where(eq(schema.searchSessions.id, sessionId)).then(() => {});
+    }).finally(() => { runningSearches.delete(sessionId); });
+    return { sessionId, status: 'running' };
+  }
+
   // 发起搜索：创建 session → 各平台搜索 → 存结果 → 标记 isNew
   // tags 支持 mode: 'must'(必中，用作搜索关键词) | 'fuzzy'(模糊，达到比例即满足)
   // keywordMode: 'genre'(默认,只用画风标签搜) | 'all'(继续搜索:用所有标签搜,找不同帖子)
@@ -334,11 +354,24 @@ export class SearchService {
     return { sessionId, resultCount: totalResults, newCount: newResults };
   }
 
-  // 删除单个 session + 其所有结果
+  // 删除单个 session + 其所有结果 + 已下载的图片文件
   async deleteSession(sessionId: number) {
-    await db.delete(schema.searchResults).where(eq(schema.searchResults.sessionId, sessionId));
+    // 删已下载的图片文件（promote 时下载的 search-{sessionId}-*.*）
+    const { readdir, unlink } = await import('node:fs/promises');
+    const uploadsDir = join(process.cwd(), 'uploads');
+    let deletedFiles = 0;
+    try {
+      const files = await readdir(uploadsDir);
+      for (const f of files) {
+        if (f.startsWith(`search-${sessionId}-`)) {
+          await unlink(join(uploadsDir, f)).catch(() => {});
+          deletedFiles++;
+        }
+      }
+    } catch {}
+    const deletedResults = await db.delete(schema.searchResults).where(eq(schema.searchResults.sessionId, sessionId));
     await db.delete(schema.searchSessions).where(eq(schema.searchSessions.id, sessionId));
-    return { sessionId, deleted: true };
+    return { sessionId, deleted: true, deletedFiles, deletedResults: (deletedResults as any).affectedRows };
   }
 
   // 删除参考图的所有 session + 结果（清空历史）

@@ -170,21 +170,13 @@ export function SearchPage() {
       onSuccess: (r) => { setActiveSession(r.sessionId); refetchSessions(); },
     });
   };
-  // 继续搜索更多：用选中历史记录的标签，非 genre 标签做关键词搜（找不同帖子）
+  // 继续搜索更多：往已有 session 加结果（不新建记录），用非 genre 标签做关键词
   const doContinueSearch = async () => {
-    if (!selectedRef || !activeData) return;
-    // 从当前选中的历史 session 取标签（不是参考图上当前选的标签）
-    const sessionTags = (activeData.searchTags as any)?.tags ?? [];
-    const tags = sessionTags.map((t: any) => {
-      if (typeof t === 'string') return { tagId: 0, label: t, dimensionId: null, mode: 'fuzzy' as const };
-      return { tagId: t.tagId ?? 0, label: t.label ?? '', dimensionId: t.dimensionId ?? null, mode: (t.mode ?? 'fuzzy') as 'must' | 'fuzzy' };
-    });
-    if (!tags.length) return;
-    const sessionPlatforms = (activeData as any).platforms ?? [...platforms];
-    const sessionFuzzyRatio = (activeData.searchTags as any)?.fuzzyRatio ?? fuzzyRatio;
-    startSearchM.mutate({ referenceId: selectedRef, tags, platforms: sessionPlatforms, fuzzyRatio: sessionFuzzyRatio, keywordMode: 'all' }, {
-      onSuccess: (r) => { setActiveSession(r.sessionId); refetchSessions(); },
-    });
+    if (!activeSession) return;
+    fetch(BASE + '/search/continue/' + activeSession, { method: 'POST' })
+      .then(r => r.json())
+      .then(() => { refetchSessions(); })
+      .catch(() => {});
   };
 
   const results = resultsQ.data ?? [];
@@ -358,7 +350,7 @@ export function SearchPage() {
               return (
                 <div key={s.id} className={`border rounded-lg p-3 cursor-pointer transition-colors relative group ${activeSession === s.id ? 'border-xhs bg-xhs-soft/30' : 'border-stone-200 hover:border-stone-300'}`}
                   onClick={() => setActiveSession(s.id)}>
-                  <button onClick={(e) => { e.stopPropagation(); if (confirm('删除本次搜索记录及其所有结果？')) { fetch(BASE + '/search/sessions/' + s.id, { method: 'DELETE' }).then(() => { refetchSessions(); if (activeSession === s.id) setActiveSession(null); }); } }}
+                  <button onClick={(e) => { e.stopPropagation(); if (confirm(`删除本次搜索记录？\n将删除：搜索记录 + ${s.resultCount} 张结果 + 已下载的图片文件\n已入库的作品不会被删除。`)) { fetch(BASE + '/search/sessions/' + s.id, { method: 'DELETE' }).then(() => { refetchSessions(); if (activeSession === s.id) setActiveSession(null); }); } }}
                     className="absolute top-2 right-2 w-5 h-5 rounded-full bg-rose-100 text-rose-500 text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-10" title="删除此搜索">×</button>
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">

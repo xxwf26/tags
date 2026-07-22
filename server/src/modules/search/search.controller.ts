@@ -17,6 +17,12 @@ export class SearchController {
     return this.searchService.abort(sessionId);
   }
 
+  // 继续搜索更多：POST /api/search/continue/:sessionId（往已有session加结果，不新建记录）
+  @Post('continue/:sessionId')
+  continueSearch(@Param('sessionId', ParseIntPipe) sessionId: number) {
+    return this.searchService.continueSearch(sessionId);
+  }
+
   // 删除单个搜索历史：DELETE /api/search/sessions/:id
   @Delete('sessions/:id')
   deleteSession(@Param('id', ParseIntPipe) id: number) {
