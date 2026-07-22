@@ -357,7 +357,7 @@ export function SearchPage() {
                     <div className="flex items-center gap-2">
                       <span className="text-[13px] font-medium text-stone-700">{sessionName || `第 ${sessions.length - i} 次搜索`}</span>
                       <button onClick={(e) => { e.stopPropagation(); const name = prompt('给这次搜索起个名字：', sessionName || `第 ${sessions.length - i} 次搜索`); if (name !== null) { fetch(BASE + '/search/sessions/' + s.id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) }).then(() => refetchSessions()); } }}
-                        className="text-[10px] text-stone-400 hover:text-xhs cursor-pointer" title="重命名">✏改名</button>
+                        className="text-[10px] text-stone-400 hover:text-xhs cursor-pointer" title="重命名">✏重命名</button>
                       <span className="text-[10px] text-stone-400">{s.status === 'running' ? '⏳进行中' : s.status === 'failed' ? '⚠已终止' : new Date(s.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
                       {s.newCount > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded bg-xhs text-white">{s.newCount} 新增</span>}
                     </div>
