@@ -344,8 +344,19 @@ export class SearchService {
   }
 
   async listSessions(referenceId: number) {
-    return db.select().from(schema.searchSessions)
+    const sessions = await db.select().from(schema.searchSessions)
       .where(eq(schema.searchSessions.referenceImageId, referenceId)).orderBy(desc(schema.searchSessions.id));
+    // 用实际结果数修正 result_count（中断/失败的 session 可能 result_count=0 但有增量写入的结果）
+    for (const s of sessions) {
+      const results = await db.select({ id: schema.searchResults.id }).from(schema.searchResults)
+        .where(eq(schema.searchResults.sessionId, s.id));
+      const actual = results.length;
+      if (actual !== (s.resultCount ?? 0)) {
+        await db.update(schema.searchSessions).set({ resultCount: actual }).where(eq(schema.searchSessions.id, s.id));
+        s.resultCount = actual;
+      }
+    }
+    return sessions;
   }
 
   async listResults(sessionId: number, tier?: string) {
