@@ -290,18 +290,32 @@ export function SearchPage() {
                 </button>
                 {running && progress && progress.total > 0 && (() => {
                   const pct = Math.round(progress.processed / progress.total * 100);
-                  // 用最近速度估 ETA（不用从开始的总平均——召回阶段 0 进度会把均值撑爆）
-                  const prev = progressRef.current;
                   const now = Date.now();
+                  const prev = progressRef.current;
                   let etaStr = '';
-                  if (prev && prev.processed < progress.processed && now > prev.ts) {
-                    const recentSpeed = (progress.processed - prev.processed) / ((now - prev.ts) / 1000); // 张/秒
-                    if (recentSpeed > 0) {
-                      const remaining = Math.round((progress.total - progress.processed) / recentSpeed);
+                  // 只在 processed 变化时更新 ref（否则时间戳刷新但进度没动，速度算出来是0）
+                  if (!prev || prev.processed !== progress.processed) {
+                    if (prev && prev.processed < progress.processed && now > prev.ts) {
+                      const recentSpeed = (progress.processed - prev.processed) / ((now - prev.ts) / 1000);
+                      if (recentSpeed > 0) {
+                        const remaining = Math.round((progress.total - progress.processed) / recentSpeed);
+                        etaStr = remaining > 60 ? `~${Math.ceil(remaining / 60)}分钟` : `~${remaining}秒`;
+                      }
+                    }
+                    progressRef.current = { processed: progress.processed, ts: now };
+                  } else if (prev) {
+                    // processed 没变，沿用上次算的 ETA（如果有）
+                    const recentSpeed = 0; // 无法算
+                  }
+                  // 兜底：processed >= 5 但没有最近速度时，用总平均（至少有数字）
+                  if (!etaStr && progress.processed >= 5) {
+                    const elapsed = (now - new Date(progress.startTime).getTime()) / 1000;
+                    const avgSpeed = progress.processed / elapsed;
+                    if (avgSpeed > 0) {
+                      const remaining = Math.round((progress.total - progress.processed) / avgSpeed);
                       etaStr = remaining > 60 ? `~${Math.ceil(remaining / 60)}分钟` : `~${remaining}秒`;
                     }
                   }
-                  progressRef.current = { processed: progress.processed, ts: now };
                   return <span className="text-[11px] text-stone-500">{pct}%（{progress.processed}/{progress.total}）{etaStr && `· 剩余 ${etaStr}`}</span>;
                 })()}
                 {running && activeSession && (
