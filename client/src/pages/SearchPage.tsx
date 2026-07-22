@@ -342,6 +342,7 @@ export function SearchPage() {
           <div className="space-y-2">
             {sessions.map((s, i) => {
               const rawTags = (s.searchTags as any)?.tags ?? s.searchTags ?? [];
+              const sessionName = (s.searchTags as any)?.name;
               // 兼容两种历史结构：寻源写 [{label,mode,...}]，发现写 ["日系",...]（同表 source 混存的遗留）
               const tagItems: { label: string; mode?: string }[] = Array.isArray(rawTags)
                 ? rawTags.map((t: any) => typeof t === 'string' ? { label: t } : { label: t?.label, mode: t?.mode }).filter((t: any) => t.label)
@@ -352,9 +353,11 @@ export function SearchPage() {
                   onClick={() => setActiveSession(s.id)}>
                   <button onClick={(e) => { e.stopPropagation(); if (confirm(`删除本次搜索记录？\n将删除：搜索记录 + ${s.resultCount} 张结果 + 已下载的图片文件\n已入库的作品不会被删除。`)) { fetch(BASE + '/search/sessions/' + s.id, { method: 'DELETE' }).then(() => { refetchSessions(); if (activeSession === s.id) setActiveSession(null); }); } }}
                     className="absolute top-2 right-2 w-5 h-5 rounded-full bg-rose-100 text-rose-500 text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-10" title="删除此搜索">×</button>
+                  <button onClick={(e) => { e.stopPropagation(); const name = prompt('给这次搜索起个名字：', sessionName || `第 ${sessions.length - i} 次搜索`); if (name !== null) { fetch(BASE + '/search/sessions/' + s.id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) }).then(() => refetchSessions()); } }}
+                    className="absolute top-2 right-8 w-5 h-5 rounded-full bg-stone-100 text-stone-500 text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-10" title="重命名">✏</button>
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <span className="text-[13px] font-medium text-stone-700">第 {sessions.length - i} 次搜索</span>
+                      <span className="text-[13px] font-medium text-stone-700">{sessionName || `第 ${sessions.length - i} 次搜索`}</span>
                       <span className="text-[10px] text-stone-400">{s.status === 'running' ? '⏳进行中' : s.status === 'failed' ? '⚠已终止' : new Date(s.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
                       {s.newCount > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded bg-xhs text-white">{s.newCount} 新增</span>}
                     </div>

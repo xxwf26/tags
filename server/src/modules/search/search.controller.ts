@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Delete, Body, Param, ParseIntPipe, Query } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Patch, Body, Param, ParseIntPipe, Query } from '@nestjs/common';
 import { SearchService } from './search.service.js';
 
 @Controller('search')
@@ -27,6 +27,12 @@ export class SearchController {
   @Delete('sessions/:id')
   deleteSession(@Param('id', ParseIntPipe) id: number) {
     return this.searchService.deleteSession(id);
+  }
+
+  // 重命名搜索历史：PATCH /api/search/sessions/:id { name }
+  @Patch('sessions/:id')
+  renameSession(@Param('id', ParseIntPipe) id: number, @Body() body: { name: string }) {
+    return this.searchService.renameSession(id, body.name);
   }
 
   // 清空参考图所有搜索历史：DELETE /api/search/sessions-all?referenceId=X

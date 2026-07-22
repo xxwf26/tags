@@ -354,6 +354,16 @@ export class SearchService {
     return { sessionId, resultCount: totalResults, newCount: newResults };
   }
 
+  // 重命名 session
+  async renameSession(sessionId: number, name: string) {
+    const [session] = await db.select().from(schema.searchSessions).where(eq(schema.searchSessions.id, sessionId));
+    if (!session) throw new Error('会话不存在');
+    const searchTags = session.searchTags as any || {};
+    searchTags.name = name;
+    await db.update(schema.searchSessions).set({ searchTags }).where(eq(schema.searchSessions.id, sessionId));
+    return { sessionId, name };
+  }
+
   // 删除单个 session + 其所有结果 + 已下载的图片文件
   async deleteSession(sessionId: number) {
     // 删已下载的图片文件（promote 时下载的 search-{sessionId}-*.*）
