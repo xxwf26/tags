@@ -9,7 +9,7 @@ import { searchXhsByKeyword, downloadImage } from '../crawl/xhs.js';
 import { searchWeiboByKeyword } from '../crawl/weibo.js';
 import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
 import { logOperation } from '../operation/op.js';
-import { loadTaxonomy, extractJson, normalizeOutput, callBoth, gateArtwork } from '../tagging/ai.js';
+import { loadTaxonomy, extractJson, normalizeOutput, callBoth, isAiConfigured } from '../tagging/ai.js';
 import { embedImage, cosine, isEmbedAvailable } from '../embed/clip.js';
 import { SettingsService } from '../settings/settings.service.js';
 import { promoteSearchResult } from '../support/promote-helpers.js';
@@ -97,6 +97,16 @@ export class SearchService {
     const mustGenreTags = body.tags.filter((t: any) => t.mode === 'must' && rootCodeOf(t.dimensionId) === 'genre');
     const allGenreTags = body.tags.filter((t: any) => rootCodeOf(t.dimensionId) === 'genre');
     const searchKeywords = (mustGenreTags.length ? mustGenreTags : allGenreTags).map((t: any) => t.label);
+    // 非 genre 标签 → 搜索后 AI 打标 + 过滤（兼具多个标签，而非 A+B 独立搜）
+    // fuzzyRatio 控制严格度：1.0=必须全部命中，0.5=至少命中一半
+    const filterTags = body.tags.filter((t: any) => rootCodeOf(t.dimensionId) !== 'genre').map((t: any) => t.label);
+    const requiredMatchCount = Math.ceil(filterTags.length * fuzzyRatio);
+    const checkTagFilter = (aiTags: any[]): boolean => {
+      if (!filterTags.length || !aiTags.length) return true; // 无过滤标签或无 AI 标签 → 放行
+      const aiLabels = new Set(aiTags.map(t => t.label));
+      const matchCount = filterTags.filter(label => aiLabels.has(label)).length;
+      return matchCount >= requiredMatchCount;
+    };
 
     // 取上一次的结果（用于 isNew 判断）
     const prevResults = prevSession ? await db.select().from(schema.searchResults)
@@ -164,6 +174,8 @@ export class SearchService {
                 }
                 if (!isArtwork) { skipNotArt++; continue; }
                 if (quality < MIN_QUALITY) { skipLowQ++; continue; }
+                // 标签过滤：非 genre 标签需在 AI 标签中命中（兼具多个标签，fuzzyRatio 控制严格度）
+                if (filterTags.length && !skipped && !checkTagFilter(aiTags)) { skipLowQ++; continue; }
                 // CLIP 相似度（image 模式）：算失败(null)不淘汰，避免误杀；低于下限才丢
                 let similarity: number | null = null;
                 if (useClip && buf) {
@@ -203,10 +215,11 @@ export class SearchService {
             }
           }
         } else if (platform === 'weibo') {
+          const tax = isAiConfigured() ? await loadTaxonomy() : null;
           const keywords = searchKeywords.length ? searchKeywords : ['插画'];
           for (const kw of keywords) {
             if (isAborted()) { console.log(`[search] session ${sessionId} 已终止`); break; }
-            const imgs = await searchWeiboByKeyword(kw, 15);
+            const imgs = await searchWeiboByKeyword(kw, 50);
             console.log(`[search] 微博 "${kw}": ${imgs.length} 张，开始 AI 筛选（增量写入）...`);
             progressTotal += imgs.length;
             await db.update(schema.searchSessions).set({ searchTags: { tags: body.tags, fuzzyRatio, progress: { total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString() } } }).where(eq(schema.searchSessions.id, sessionId));
@@ -220,6 +233,7 @@ export class SearchService {
               let isArtwork = false;
               let quality = 0;
               let skipped = false;
+              let aiTags: any[] = [];
               let imageHash: string | null = null;
               let buf: Buffer | null = null;
               try {
@@ -232,10 +246,22 @@ export class SearchService {
                   if ([...sessionHashes].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipDup++; continue; }
                   sessionHashes.add(imageHash);
                 }
-                const gate = await gateArtwork(buf.toString('base64'), type);
-                isArtwork = gate.isArtwork;
-                quality = gate.quality;
-                skipped = gate.skipped;
+                // 用 callBoth（同小红书）：既能质检(is_artwork/quality)又能打 aiTags（供标签过滤）
+                if (isAiConfigured() && tax) {
+                  const b64 = buf.toString('base64');
+                  const { gemini } = await callBoth(b64, type, tax.prompt);
+                  const gParsed = extractJson(gemini);
+                  isArtwork = gParsed?.is_artwork === true;
+                  quality = Number(gParsed?.quality) || 0;
+                  if (isArtwork) {
+                    const gIds = normalizeOutput(gParsed, tax.labelMap);
+                    const allIds = new Set([...gIds]);
+                    const tagRows = allIds.size ? await db.select().from(schema.tags).where(inArray(schema.tags.id, [...allIds])) : [];
+                    aiTags = tagRows.map(t => ({ tagId: t.id, label: t.label, dimensionId: t.dimensionId }));
+                  }
+                } else {
+                  skipped = true; // AI 未配置：跳过质检+过滤，直接入库标"未质检"
+                }
               } catch (e: any) {
                 console.error(`[search] 微博图处理失败 "${im.title?.slice(0, 20)}": ${e.message}`);
               }
@@ -243,6 +269,8 @@ export class SearchService {
               if (!skipped) {
                 if (!isArtwork) { skipNotArt++; continue; }
                 if (quality < MIN_QUALITY) { skipLowQ++; continue; }
+                // 标签过滤：非 genre 标签需在 AI 标签中命中（兼具多个标签）
+                if (filterTags.length && !checkTagFilter(aiTags)) { skipLowQ++; continue; }
               }
               // CLIP 相似度（image 模式）
               let similarity: number | null = null;
@@ -262,6 +290,7 @@ export class SearchService {
                 imageUrl: im.url,
                 allImages: [im.url],
                 imageHash: imageHash || null,
+                aiTags: aiTags.length ? aiTags : null,
                 similarity,
                 quality: skipped ? null : quality,
                 title: im.title || `微博·${kw}`,
