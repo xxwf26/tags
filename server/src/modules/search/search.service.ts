@@ -104,7 +104,7 @@ export class SearchService {
     const checkTagFilter = (aiTags: any[]): boolean => {
       if (!filterTags.length || !aiTags.length) return true; // 无过滤标签或无 AI 标签 → 放行
       const aiLabels = new Set(aiTags.map(t => t.label));
-      const matchCount = filterTags.filter(label => aiLabels.has(label)).length;
+      const matchCount = filterTags.filter((label: string) => aiLabels.has(label)).length;
       return matchCount >= requiredMatchCount;
     };
 
@@ -147,6 +147,7 @@ export class SearchService {
                 let isArtwork = false;
                 let quality = 0;
                 let aiTags: any[] = [];
+                let xhsSkipped = false;
                 let imageHash: string | null = null;
                 let buf: Buffer | null = null;
                 try {
@@ -175,7 +176,7 @@ export class SearchService {
                 if (!isArtwork) { skipNotArt++; continue; }
                 if (quality < MIN_QUALITY) { skipLowQ++; continue; }
                 // 标签过滤：非 genre 标签需在 AI 标签中命中（兼具多个标签，fuzzyRatio 控制严格度）
-                if (filterTags.length && !skipped && !checkTagFilter(aiTags)) { skipLowQ++; continue; }
+                if (filterTags.length && !xhsSkipped && !checkTagFilter(aiTags)) { skipLowQ++; continue; }
                 // CLIP 相似度（image 模式）：算失败(null)不淘汰，避免误杀；低于下限才丢
                 let similarity: number | null = null;
                 if (useClip && buf) {
