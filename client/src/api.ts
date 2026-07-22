@@ -199,7 +199,7 @@ export async function updateReferenceTags(id: number, manualTags: any[]) {
   const r = await fetch(BASE + '/reference/' + id + '/tags', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ manualTags }) });
   if (!r.ok) throw new Error('update tags failed'); return r.json();
 }
-export async function startSearch(body: { referenceId: number; tags: any[]; platforms?: string[]; fuzzyRatio?: number }) {
+export async function startSearch(body: { referenceId: number; tags: any[]; platforms?: string[]; fuzzyRatio?: number; keywordMode?: string }) {
   const r = await fetch(BASE + '/search/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   if (!r.ok) throw new Error('search failed'); return r.json();
 }

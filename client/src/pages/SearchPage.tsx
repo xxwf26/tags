@@ -170,21 +170,19 @@ export function SearchPage() {
       onSuccess: (r) => { setActiveSession(r.sessionId); refetchSessions(); },
     });
   };
-  // 继续搜索更多：用非 genre 标签做关键词搜（找不同帖子），所有标签都做过滤（确保兼具）
+  // 继续搜索更多：用选中历史记录的标签，非 genre 标签做关键词搜（找不同帖子）
   const doContinueSearch = async () => {
-    if (!selectedRef) return;
-    const allTags: { id: number; label: string; dimensionId: number }[] = [];
-    for (const top of (tagsQ.data ?? [])) {
-      for (const t of top.tags) allTags.push({ id: t.id, label: t.label, dimensionId: top.id });
-      for (const sub of top.children) {
-        for (const t of sub.tags) allTags.push({ id: t.id, label: t.label, dimensionId: sub.id });
-      }
-    }
-    const tags = selectedIds.map(id => {
-      const t = allTags.find(a => a.id === id);
-      return { tagId: id, label: t?.label ?? '', dimensionId: t?.dimensionId ?? null, mode: tagModes[id] };
+    if (!selectedRef || !activeData) return;
+    // 从当前选中的历史 session 取标签（不是参考图上当前选的标签）
+    const sessionTags = (activeData.searchTags as any)?.tags ?? [];
+    const tags = sessionTags.map((t: any) => {
+      if (typeof t === 'string') return { tagId: 0, label: t, dimensionId: null, mode: 'fuzzy' as const };
+      return { tagId: t.tagId ?? 0, label: t.label ?? '', dimensionId: t.dimensionId ?? null, mode: (t.mode ?? 'fuzzy') as 'must' | 'fuzzy' };
     });
-    startSearchM.mutate({ referenceId: selectedRef, tags, platforms: [...platforms], fuzzyRatio, keywordMode: 'all' }, {
+    if (!tags.length) return;
+    const sessionPlatforms = (activeData as any).platforms ?? [...platforms];
+    const sessionFuzzyRatio = (activeData.searchTags as any)?.fuzzyRatio ?? fuzzyRatio;
+    startSearchM.mutate({ referenceId: selectedRef, tags, platforms: sessionPlatforms, fuzzyRatio: sessionFuzzyRatio, keywordMode: 'all' }, {
       onSuccess: (r) => { setActiveSession(r.sessionId); refetchSessions(); },
     });
   };
@@ -310,7 +308,7 @@ export function SearchPage() {
                     fetch(BASE + '/search/abort/' + activeSession, { method: 'POST' }).then(() => refetchSessions());
                   }} className="text-[12px] text-rose-500 border border-rose-300 rounded-full px-3 py-1.5 hover:bg-rose-50">⏹ 终止</button>
                 )}
-                {!running && activeData && selectedIds.length > 0 && (
+                {!running && activeData && (activeData.searchTags as any)?.tags?.length > 0 && (
                   <button onClick={doContinueSearch} disabled={startSearchM.isPending}
                     className="text-[12px] bg-violet-600 text-white rounded-full px-3 py-1.5 font-medium disabled:opacity-40">
                     {startSearchM.isPending ? '发起中…' : '🔍 继续搜索更多'}
