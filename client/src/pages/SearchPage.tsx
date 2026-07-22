@@ -95,6 +95,7 @@ export function SearchPage() {
 
   // 切换参考图前自动保存当前标签（不丢失）
   const prevRefRef = useRef<number | null>(null);
+  const progressRef = useRef<{ processed: number; ts: number } | null>(null);
   useEffect(() => {
     // 切换走之前，把当前标签存到旧参考图
     if (prevRefRef.current !== null && prevRefRef.current !== selectedRef) {
@@ -289,11 +290,19 @@ export function SearchPage() {
                 </button>
                 {running && progress && progress.total > 0 && (() => {
                   const pct = Math.round(progress.processed / progress.total * 100);
-                  const elapsed = (Date.now() - new Date(progress.startTime).getTime()) / 1000;
-                  const avgPerItem = progress.processed > 0 ? elapsed / progress.processed : 0;
-                  const remaining = Math.round(avgPerItem * (progress.total - progress.processed));
-                  const etaStr = remaining > 60 ? `~${Math.ceil(remaining / 60)}分钟` : `~${remaining}秒`;
-                  return <span className="text-[11px] text-stone-500">{pct}%（{progress.processed}/{progress.total}）· 预计剩余 {etaStr}</span>;
+                  // 用最近速度估 ETA（不用从开始的总平均——召回阶段 0 进度会把均值撑爆）
+                  const prev = progressRef.current;
+                  const now = Date.now();
+                  let etaStr = '';
+                  if (prev && prev.processed < progress.processed && now > prev.ts) {
+                    const recentSpeed = (progress.processed - prev.processed) / ((now - prev.ts) / 1000); // 张/秒
+                    if (recentSpeed > 0) {
+                      const remaining = Math.round((progress.total - progress.processed) / recentSpeed);
+                      etaStr = remaining > 60 ? `~${Math.ceil(remaining / 60)}分钟` : `~${remaining}秒`;
+                    }
+                  }
+                  progressRef.current = { processed: progress.processed, ts: now };
+                  return <span className="text-[11px] text-stone-500">{pct}%（{progress.processed}/{progress.total}）{etaStr && `· 剩余 ${etaStr}`}</span>;
                 })()}
                 {running && activeSession && (
                   <button onClick={() => {
