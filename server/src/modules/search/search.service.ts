@@ -157,9 +157,14 @@ export class SearchService {
       if (r.sourceUrl) prevUrls.add(r.sourceUrl);
     }
 
-    let totalResults = 0, newResults = 0;
+    // 目标结果数：达到就停（不浪费 AI 调用）。继续搜索时加上已有结果数。
+    const targetResults = 300 + existingInSession.length;
+    let progressTotal = 0, progressProcessed = 0;
+
+    let totalResults = existingInSession.length, newResults = 0;
 
     for (const platform of platforms) {
+      if (totalResults >= targetResults) break; // 达到目标，不再搜下一个平台
       try {
         if (platform === 'xiaohongshu') {
           if (!xhsCookie) { console.error('[search] 小红书: 未配置 XHS_COOKIE，跳过'); }
@@ -168,7 +173,7 @@ export class SearchService {
             const tax = await loadTaxonomy();
             for (const kw of keywords) {
               if (isAborted()) { console.log(`[search] session ${sessionId} 已终止`); break; }
-              const notes = await searchXhsByKeyword(kw, 300, xhsCookie);
+              const notes = await searchXhsByKeyword(kw, 500, xhsCookie);
               console.log(`[search] 小红书 "${kw}": ${notes.length} 帖，开始 AI 筛选（增量写入）...`);
               progressTotal += notes.length;
               await db.update(schema.searchSessions).set({ searchTags: { tags: body.tags, fuzzyRatio, progress: { total: progressTotal, processed: 0, startTime: new Date(progressStart).toISOString() } } }).where(eq(schema.searchSessions.id, sessionId));
@@ -243,6 +248,7 @@ export class SearchService {
                 });
                 totalResults++;
                 if (isNew) newResults++;
+                if (totalResults >= targetResults) { console.log(`[search] 达到目标 ${targetResults} 张，停止`); break; }
                 // 每3张更新一次 session 计数（前端轮询能看到进度）
                 if (progressProcessed % 3 === 0) {
                   await db.update(schema.searchSessions).set({ resultCount: totalResults, newCount: newResults, searchTags: { tags: body.tags, fuzzyRatio, progress: { total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString() } } }).where(eq(schema.searchSessions.id, sessionId));
@@ -257,7 +263,7 @@ export class SearchService {
           const keywords = searchKeywords.length ? searchKeywords : ['插画'];
           for (const kw of keywords) {
             if (isAborted()) { console.log(`[search] session ${sessionId} 已终止`); break; }
-            const imgs = await searchWeiboByKeyword(kw, 50);
+            const imgs = await searchWeiboByKeyword(kw, 100);
             console.log(`[search] 微博 "${kw}": ${imgs.length} 张，开始 AI 筛选（增量写入）...`);
             progressTotal += imgs.length;
             await db.update(schema.searchSessions).set({ searchTags: { tags: body.tags, fuzzyRatio, progress: { total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString() } } }).where(eq(schema.searchSessions.id, sessionId));
@@ -339,6 +345,7 @@ export class SearchService {
               });
               totalResults++;
               if (isNew) newResults++;
+              if (totalResults >= targetResults) { console.log(`[search] 微博达到目标 ${targetResults} 张，停止`); break; }
               if (progressProcessed % 3 === 0) {
                 await db.update(schema.searchSessions).set({ resultCount: totalResults, newCount: newResults, searchTags: { tags: body.tags, fuzzyRatio, progress: { total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString() } } }).where(eq(schema.searchSessions.id, sessionId));
                 console.log(`[search] 进度: ${progressProcessed}/${progressTotal} 已处理，保留 ${kept} 张（非绘画 ${skipNotArt}，低质 ${skipLowQ}，重复 ${skipDup}）`);
