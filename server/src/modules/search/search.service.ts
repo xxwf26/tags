@@ -143,11 +143,19 @@ export class SearchService {
     const prevHashes = new Set(prevResults.map(r => r.imageHash).filter(Boolean));
     const prevUrls = new Set(prevResults.map(r => r.sourceUrl).filter(Boolean));
 
-    // 共享去重集合：库内已有 hash + 本 session 已收集 hash
+    // 共享去重集合：库内已有 hash + 本 session 已有 hash（继续搜索时预加载已有结果，去重）
     const libHashes = (await db.select({ hash: schema.artworks.imageHash })
       .from(schema.artworks).where(isNotNull(schema.artworks.imageHash))).map(a => a.hash).filter(Boolean) as string[];
     const libHashSet = new Set(libHashes);
     const sessionHashes = new Set<string>();
+    // 继续搜索：预加载本 session 已有结果的 hash + url，避免重复入库
+    const existingInSession = await db.select({ hash: schema.searchResults.imageHash, url: schema.searchResults.imageUrl, sourceUrl: schema.searchResults.sourceUrl })
+      .from(schema.searchResults).where(eq(schema.searchResults.sessionId, sessionId));
+    for (const r of existingInSession) {
+      if (r.hash) sessionHashes.add(r.hash);
+      if (r.url) prevUrls.add(r.url);
+      if (r.sourceUrl) prevUrls.add(r.sourceUrl);
+    }
 
     let totalResults = 0, newResults = 0;
 
