@@ -27,7 +27,9 @@ export class CandidateController {
   // 候选队列：GET /api/candidates?status=pending
   @Get('candidates')
   list(@Query('status') status?: string) {
-    return this.candidateService.list(status || 'pending');
+    // status 是 enum，非法值直接塞 where 可能报错/返回空，用白名单兜底
+    const allowed = ['pending', 'promoted', 'merged', 'rejected'];
+    return this.candidateService.list(allowed.includes(status || '') ? status! : 'pending');
   }
 
   // 转正入库：POST /api/candidates/:id/promote  body: { artistId?, newArtist? }

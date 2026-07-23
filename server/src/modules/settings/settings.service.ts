@@ -14,18 +14,14 @@ export class SettingsService {
       key: r.key,
       hasValue: !!r.value,
       updatedAt: r.updatedAt,
-      preview: r.value ? r.value.slice(0, 30) + '...' : null,
+      preview: r.value ? (r.value.length > 30 ? r.value.slice(0, 30) + '...' : r.value) : null,
     }));
   }
 
   async set(key: string, value: string) {
-    // upsert
-    const [existing] = await db.select().from(schema.settings).where(eq(schema.settings.key, key));
-    if (existing) {
-      await db.update(schema.settings).set({ value }).where(eq(schema.settings.key, key));
-    } else {
-      await db.insert(schema.settings).values({ key, value });
-    }
+    // 原子 upsert：key 是主键，先查后写会在并发保存同 key 时双双走 insert 撞主键。
+    await db.insert(schema.settings).values({ key, value })
+      .onDuplicateKeyUpdate({ set: { value } });
     return { key, saved: true };
   }
 

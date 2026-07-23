@@ -29,8 +29,8 @@ export function AdminPage() {
             <span>时间</span><span>操作</span><span className="hidden md:block">对象</span><span>动作</span>
           </div>
           {ops.map(op => {
-            const canUndo = op.undoable && !op.undone;
-            const canRedo = op.undoable && op.undone;
+            const canUndo = !!(op.undoable && !op.undone);
+            const canRedo = !!(op.undoable && op.undone);
             return (
               <div key={op.id} className="grid grid-cols-[auto_1fr_auto] md:grid-cols-[auto_1fr_auto_auto] gap-2 px-4 py-2.5 text-[13px] border-b border-stone-50 items-center">
                 <span className="text-stone-400 text-[12px] whitespace-nowrap">{timeOf(op.createdAt)}</span>

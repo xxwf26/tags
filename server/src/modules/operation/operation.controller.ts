@@ -7,7 +7,9 @@ export class OperationController {
 
   @Get()
   list(@Query('limit') limit?: string) {
-    return this.operationService.list(limit ? Number(limit) : 100);
+    // 校验 limit，避免 Number('abc')=NaN 传进 .limit() 生成非法 SQL
+    const n = Number(limit);
+    return this.operationService.list(Number.isInteger(n) && n > 0 ? n : 100);
   }
 
   @Post(':id/undo')

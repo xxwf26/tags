@@ -27,7 +27,10 @@ export function ConfigPage() {
   };
   const submitSub = () => {
     if (!newSub.parentId || !newSub.name.trim()) return;
-    createDim.mutate({ parentId: Number(newSub.parentId), code: `genre_${Date.now()}`, name: newSub.name.trim() }, { onSuccess: () => setNewSub({ parentId: '', name: '' }) });
+    // code 前缀用父维度的 code，不再一律硬编码 genre_（否则在 technique/subject 等维度下生成的 code 前缀语义错误）
+    const parent = tree.find(t => t.id === Number(newSub.parentId));
+    const prefix = parent?.code || 'dim';
+    createDim.mutate({ parentId: Number(newSub.parentId), code: `${prefix}_${Date.now()}`, name: newSub.name.trim() }, { onSuccess: () => setNewSub({ parentId: '', name: '' }) });
   };
   const saveAliases = (id: number) => {
     const v = editAliases[id] ?? '';

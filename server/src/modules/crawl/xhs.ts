@@ -101,7 +101,10 @@ export async function downloadImage(url: string): Promise<{ buf: Buffer; type: s
   else if (url.includes('sinaimg.cn')) extra = { Referer: 'https://m.weibo.cn/' };
   else if (url.includes('mihuashi.com')) extra = { Referer: 'https://www.mihuashi.com/' };
   const { status, body, type } = await get(url, 0, true, extra);
-  if (status !== 200 || !body || body.length < 2000) throw new Error(`图下载失败 status ${status}`);
+  if (status !== 200 || !body || !body.length) throw new Error(`图下载失败 status ${status}`);
+  // 校验 content-type：反爬/防盗链常返回 text/html 错误页（可能 >2KB），只靠字节数判不出来。
+  // type 为空时放行（部分 CDN 不给 content-type），非空则必须是图片。
+  if (type && !type.startsWith('image/')) throw new Error(`非图片响应 content-type=${type}`);
   return { buf: body, type: type || 'image/jpeg' };
 }
 

@@ -96,6 +96,10 @@ export function SearchPage() {
   // 切换参考图前自动保存当前标签（不丢失）
   const prevRefRef = useRef<number | null>(null);
   const progressRef = useRef<{ processed: number; ts: number } | null>(null);
+  // effect 依赖只有 [selectedRef]，闭包里的 tagModes 是上次切换时建立的旧值；
+  // 用 ref 持有最新 tagModes，保存旧图标签时读 ref，避免存进过期的标签集合。
+  const tagModesRef = useRef(tagModes);
+  tagModesRef.current = tagModes;
   useEffect(() => {
     // 切换走之前，把当前标签存到旧参考图
     if (prevRefRef.current !== null && prevRefRef.current !== selectedRef) {
@@ -106,7 +110,7 @@ export function SearchPage() {
           for (const t of top.tags) allTags.push({ id: t.id, label: t.label, dimensionId: top.id });
           for (const sub of top.children) for (const t of sub.tags) allTags.push({ id: t.id, label: t.label, dimensionId: sub.id });
         }
-        const manualTags = Object.keys(tagModes).map(id => {
+        const manualTags = Object.keys(tagModesRef.current).map(id => {
           const t = allTags.find(a => a.id === Number(id));
           return { tagId: Number(id), label: t?.label ?? '', dimensionId: t?.dimensionId ?? null };
         });

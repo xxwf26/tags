@@ -4,7 +4,7 @@
 import { readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { db, schema } from '../../database/db.js';
-import { eq, and, desc, inArray, isNotNull } from 'drizzle-orm';
+import { eq, and, desc, inArray, isNotNull, sql } from 'drizzle-orm';
 import { searchXhsByKeyword, downloadImage } from '../crawl/xhs.js';
 import { searchWeiboByKeyword } from '../crawl/weibo.js';
 import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
@@ -105,6 +105,16 @@ export class SearchService {
     const fuzzyRatio = body.fuzzyRatio ?? 0.5;
     const keywordMode = body.keywordMode ?? 'genre';
 
+    // 保留会话自定义名字：executeSearch 会整体覆盖 searchTags JSON，若不带上 name
+    // 则「改名后继续搜索」会把名字冲掉。开头快照一次，写入时始终带上。
+    const [curSession] = await db.select().from(schema.searchSessions).where(eq(schema.searchSessions.id, sessionId));
+    const sessionName = (curSession?.searchTags as any)?.name;
+    const buildTags = (progress: any) => {
+      const st: any = { tags: body.tags, fuzzyRatio, progress };
+      if (sessionName != null) st.name = sessionName;
+      return st;
+    };
+
     // 加载维度表，解析每个标签的顶层 code（genre/technique/...）
     const dims = await db.select().from(schema.tagDimensions);
     const dimById = new Map(dims.map(d => [d.id, d]));
@@ -175,7 +185,7 @@ export class SearchService {
               const notes = await searchXhsByKeyword(kw, 500, xhsCookie);
               console.log(`[search] 小红书 "${kw}": ${notes.length} 帖，开始 AI 筛选（增量写入）...`);
               progressTotal += notes.length;
-              await db.update(schema.searchSessions).set({ searchTags: { tags: body.tags, fuzzyRatio, progress: { total: progressTotal, processed: 0, startTime: new Date(progressStart).toISOString() } } }).where(eq(schema.searchSessions.id, sessionId));
+              await db.update(schema.searchSessions).set({ searchTags: buildTags({ total: progressTotal, processed: 0, startTime: new Date(progressStart).toISOString() }) }).where(eq(schema.searchSessions.id, sessionId));
               let kept = 0, skipNotArt = 0, skipDup = 0, skipLowQ = 0;
               for (const n of notes) {
                 if (isAborted()) { console.log(`[search] session ${sessionId} 已终止（已处理 ${progressProcessed} 张）`); break; }
@@ -188,7 +198,6 @@ export class SearchService {
                 let isArtwork = false;
                 let quality = 0;
                 let aiTags: any[] = [];
-                let xhsSkipped = false;
                 let imageHash: string | null = null;
                 let buf: Buffer | null = null;
                 try {
@@ -217,7 +226,7 @@ export class SearchService {
                 if (!isArtwork) { skipNotArt++; continue; }
                 if (quality < MIN_QUALITY) { skipLowQ++; continue; }
                 // 标签过滤：非 genre 标签需在 AI 标签中命中（兼具多个标签，fuzzyRatio 控制严格度）
-                if (filterTags.length && !xhsSkipped && !checkTagFilter(aiTags)) { skipLowQ++; continue; }
+                if (filterTags.length && !checkTagFilter(aiTags)) { skipLowQ++; continue; }
                 // CLIP 相似度（image 模式）：算失败(null)不淘汰，避免误杀；低于下限才丢
                 let similarity: number | null = null;
                 if (useClip && buf) {
@@ -228,7 +237,7 @@ export class SearchService {
                 kept++;
                 // 增量写入：每筛选完一张立即写 DB
                 const dedupKey = n.sourceUrl || n.images[0] || '';
-                const isNew = !prevUrls.has(dedupKey) && !prevHashes.has(n.images[0] || '');
+                const isNew = !prevUrls.has(dedupKey) && !(imageHash && prevHashes.has(imageHash));
                 await db.insert(schema.searchResults).values({
                   sessionId,
                   referenceImageId: body.referenceId,
@@ -250,7 +259,7 @@ export class SearchService {
                 if (totalResults >= targetResults) { console.log(`[search] 达到目标 ${targetResults} 张，停止`); break; }
                 // 每3张更新一次 session 计数（前端轮询能看到进度）
                 if (progressProcessed % 3 === 0) {
-                  await db.update(schema.searchSessions).set({ resultCount: totalResults, newCount: newResults, searchTags: { tags: body.tags, fuzzyRatio, progress: { total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString() } } }).where(eq(schema.searchSessions.id, sessionId));
+                  await db.update(schema.searchSessions).set({ resultCount: totalResults, newCount: newResults, searchTags: buildTags({ total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString() }) }).where(eq(schema.searchSessions.id, sessionId));
                   console.log(`[search] 进度: ${progressProcessed}/${progressTotal} 已处理，保留 ${kept} 张（非绘画 ${skipNotArt}，低质 ${skipLowQ}，重复 ${skipDup}）`);
                 }
               }
@@ -265,7 +274,7 @@ export class SearchService {
             const imgs = await searchWeiboByKeyword(kw, 100);
             console.log(`[search] 微博 "${kw}": ${imgs.length} 张，开始 AI 筛选（增量写入）...`);
             progressTotal += imgs.length;
-            await db.update(schema.searchSessions).set({ searchTags: { tags: body.tags, fuzzyRatio, progress: { total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString() } } }).where(eq(schema.searchSessions.id, sessionId));
+            await db.update(schema.searchSessions).set({ searchTags: buildTags({ total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString() }) }).where(eq(schema.searchSessions.id, sessionId));
             let kept = 0, skipNotArt = 0, skipDup = 0, skipLowQ = 0;
             const seenNoteIds = new Set<string>(); // 同一微博帖子只保留第一张图，避免多图帖子刷屏重复
             for (const im of imgs) {
@@ -324,7 +333,7 @@ export class SearchService {
               }
               kept++;
               const sourceUrl = im.sourceUrl || (im.noteId ? `https://m.weibo.cn/status/${im.noteId}` : im.url);
-              const isNew = !prevUrls.has(sourceUrl) && !prevHashes.has(im.url);
+              const isNew = !prevUrls.has(sourceUrl) && !(imageHash && prevHashes.has(imageHash));
               await db.insert(schema.searchResults).values({
                 sessionId,
                 referenceImageId: body.referenceId,
@@ -346,7 +355,7 @@ export class SearchService {
               if (isNew) newResults++;
               if (totalResults >= targetResults) { console.log(`[search] 微博达到目标 ${targetResults} 张，停止`); break; }
               if (progressProcessed % 3 === 0) {
-                await db.update(schema.searchSessions).set({ resultCount: totalResults, newCount: newResults, searchTags: { tags: body.tags, fuzzyRatio, progress: { total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString() } } }).where(eq(schema.searchSessions.id, sessionId));
+                await db.update(schema.searchSessions).set({ resultCount: totalResults, newCount: newResults, searchTags: buildTags({ total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString() }) }).where(eq(schema.searchSessions.id, sessionId));
                 console.log(`[search] 进度: ${progressProcessed}/${progressTotal} 已处理，保留 ${kept} 张（非绘画 ${skipNotArt}，低质 ${skipLowQ}，重复 ${skipDup}）`);
               }
             }
@@ -362,7 +371,7 @@ export class SearchService {
     const elapsed = Date.now() - progressStart;
     await db.update(schema.searchSessions).set({
       status: 'ok', resultCount: totalResults, newCount: newResults,
-      searchTags: { tags: body.tags, fuzzyRatio, progress: { total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString(), elapsedMs: elapsed } },
+      searchTags: buildTags({ total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString(), elapsedMs: elapsed }),
     }).where(eq(schema.searchSessions.id, sessionId));
     await logOperation({ type: 'search_start', targetType: 'reference', targetId: body.referenceId, summary: `寻源搜索 #${sessionId}：${totalResults} 结果（${newResults} 新增）` });
     return { sessionId, resultCount: totalResults, newCount: newResults };
@@ -380,19 +389,25 @@ export class SearchService {
 
   // 删除单个 session + 其所有结果 + 已下载的图片文件
   async deleteSession(sessionId: number) {
-    // 删已下载的图片文件（promote 时下载的 search-{sessionId}-*.*）
+    // promote 时下载的图片文件名是 search-{resultId}-{ts}.ext（见 promoteSearchResult），
+    // 前缀嵌的是 result.id 而非 sessionId，所以要先取本 session 所有 result 的 id 再按其匹配删除。
+    const results = await db.select({ id: schema.searchResults.id })
+      .from(schema.searchResults).where(eq(schema.searchResults.sessionId, sessionId));
     const { readdir, unlink } = await import('node:fs/promises');
     const uploadsDir = join(process.cwd(), 'uploads');
     let deletedFiles = 0;
-    try {
-      const files = await readdir(uploadsDir);
-      for (const f of files) {
-        if (f.startsWith(`search-${sessionId}-`)) {
-          await unlink(join(uploadsDir, f)).catch(() => {});
-          deletedFiles++;
+    if (results.length) {
+      const prefixes = results.map(r => `search-${r.id}-`);
+      try {
+        const files = await readdir(uploadsDir);
+        for (const f of files) {
+          if (prefixes.some(p => f.startsWith(p))) {
+            await unlink(join(uploadsDir, f)).catch(() => {});
+            deletedFiles++;
+          }
         }
-      }
-    } catch {}
+      } catch {}
+    }
     const deletedResults = await db.delete(schema.searchResults).where(eq(schema.searchResults.sessionId, sessionId));
     await db.delete(schema.searchSessions).where(eq(schema.searchSessions.id, sessionId));
     return { sessionId, deleted: true, deletedFiles, deletedResults: (deletedResults as any).affectedRows };
@@ -412,11 +427,17 @@ export class SearchService {
   async listSessions(referenceId: number) {
     const sessions = await db.select().from(schema.searchSessions)
       .where(eq(schema.searchSessions.referenceImageId, referenceId)).orderBy(desc(schema.searchSessions.id));
-    // 用实际结果数修正 result_count（中断/失败的 session 可能 result_count=0 但有增量写入的结果）
+    if (!sessions.length) return sessions;
+    // 用实际结果数修正 result_count（中断/失败的 session 可能 result_count=0 但有增量写入的结果）。
+    // 单条 GROUP BY 聚合，避免 N+1；running 中的 session 结果数还在变，跳过修正与回写（避免与正在写入的搜索竞争）。
+    const counts = await db.select({ sessionId: schema.searchResults.sessionId, n: sql<number>`count(*)` })
+      .from(schema.searchResults)
+      .where(inArray(schema.searchResults.sessionId, sessions.map(s => s.id)))
+      .groupBy(schema.searchResults.sessionId);
+    const countMap = new Map(counts.map(c => [c.sessionId, Number(c.n)]));
     for (const s of sessions) {
-      const results = await db.select({ id: schema.searchResults.id }).from(schema.searchResults)
-        .where(eq(schema.searchResults.sessionId, s.id));
-      const actual = results.length;
+      if (s.status === 'running') continue;
+      const actual = countMap.get(s.id) ?? 0;
       if (actual !== (s.resultCount ?? 0)) {
         await db.update(schema.searchSessions).set({ resultCount: actual }).where(eq(schema.searchSessions.id, s.id));
         s.resultCount = actual;

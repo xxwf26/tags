@@ -37,7 +37,7 @@ export class OperationService {
     if (op.type === 'artwork_delete') {
       const payload = op.payload as any;
       if (!payload?.artworkId) throw new Error('重做信息缺失');
-      await db.update(schema.artworks).set({ deletedAt: new Date(Date.now() + 8 * 3600 * 1000) }).where(eq(schema.artworks.id, payload.artworkId));
+      await db.update(schema.artworks).set({ deletedAt: new Date() }).where(eq(schema.artworks.id, payload.artworkId));
     } else {
       throw new Error(`暂不支持重做 ${op.type}`);
     }

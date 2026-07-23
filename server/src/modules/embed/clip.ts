@@ -54,7 +54,12 @@ function ensureWorker(): Promise<void> {
     }
     worker = w;
 
+    // worker 崩溃时 error 与 exit 常先后各触发一次，用一次性守卫保证每个 worker 实例只计一次崩溃，
+    // 否则 restarts 双计会让一次半崩溃就撞到 MAX_RESTARTS 而永久禁用 CLIP。
+    let dead = false;
     const onDead = (err: Error) => {
+      if (dead) return;
+      dead = true;
       rejectAllPending(new Error('CLIP worker 已退出'));
       worker = null;
       readyPromise = null;
