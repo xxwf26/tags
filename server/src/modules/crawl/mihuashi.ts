@@ -86,6 +86,31 @@ export async function searchMihuashi(tagName: string, limit = 30): Promise<MhsAr
   return arts;
 }
 
+// 取单个作品的画师信息（name + 主页）。米画师作品列表接口不返回画师，只有详情接口
+// /api/v1/artworks/{id} 的 artwork.author 才有。入库(promote)时按需补画师用（方案乙）。
+// 走子进程 mhs-artwork-detail.mts + 串行锁（与 searchMihuashi 共享，避免并发挤爆反爬）。
+export async function fetchMihuashiArtworkAuthor(artworkId: string | number): Promise<{ author: string | null; authorUrl: string | null }> {
+  const id = String(artworkId).trim();
+  if (!id || !/^\d+$/.test(id)) return { author: null, authorUrl: null };
+  const scriptPath = join(process.cwd(), 'src', 'scripts', 'mhs-artwork-detail.mts');
+  const runOnce = (): Promise<{ author: string | null; authorUrl: string | null }> => new Promise((resolve) => {
+    execFile(process.execPath, ['--import', 'tsx', scriptPath, id], {
+      maxBuffer: 8 * 1024 * 1024, timeout: 90000, windowsHide: true,
+    }, (err: any, stdout: any) => {
+      if (err) { console.error(`[mhs] 取作品 ${id} 画师失败: ${err.message}`); resolve({ author: null, authorUrl: null }); return; }
+      try { const j = JSON.parse(stdout); resolve({ author: j.author ?? null, authorUrl: j.authorUrl ?? null }); }
+      catch { resolve({ author: null, authorUrl: null }); }
+    });
+  });
+  return withMhsLock(runOnce);
+}
+
+// 从米画师作品页 URL 抠作品 id：https://www.mihuashi.com/artworks/36711276
+export function extractMihuashiArtworkId(url: string): string | null {
+  const m = String(url || '').match(/mihuashi\.com\/artworks\/(\d+)/);
+  return m ? m[1] : null;
+}
+
 // 拉米画师可用画风标签（供前端下拉 + getTagIdMap）。走子进程 mhs-tags.mts：chromium segfault 只杀子进程不拖垮主服务。
 // 进程内缓存 10 分钟。
 let _tagsCache: { data: { id: number; name: string; type: string }[]; ts: number } | null = null;
@@ -138,39 +163,42 @@ async function getTagIdMap(): Promise<Map<string, number>> {
 // 米画师画师主页接口需登录态，故走 storageState；反检测同 search。
 export async function fetchMihuashiArtistWorks(profileId: string, authPath: string, limit = 30): Promise<MhsArtwork[]> {
   const b = await chromium.launch({ headless: true, args: STEALTH_ARGS });
-  const ctx = await b.newContext({ userAgent: UA, locale: 'zh-CN', storageState: authPath });
-  await ctx.addInitScript(() => { Object.defineProperty(navigator, 'webdriver', { get: () => undefined }); });
-  const p = await ctx.newPage();
   const arts: MhsArtwork[] = [];
   const seen = new Set<number>();
-  p.on('response', async r => {
-    // 仅收该画师自己的作品列表（users/{profileId}/artworks），排除登录账号的 dashboard 请求
-    if (r.url().includes(`/api/v1/users/${profileId}/artworks`)) {
-      try {
-        const j = JSON.parse(await r.text());
-        for (const a of j.artworks || []) {
-          if (a.id && a.url && !seen.has(a.id)) {
-            seen.add(a.id);
-            const { author, authorUrl } = extractAuthor(a);
-            arts.push({ mhsId: a.id, imageUrl: a.url, width: a.width ?? null, height: a.height ?? null, author, authorUrl });
-          }
-        }
-      } catch {}
-    }
-  });
   try {
-    await p.goto(`https://www.mihuashi.com/profiles/${profileId}`, { waitUntil: 'networkidle', timeout: 45000 });
-    await p.waitForTimeout(3000);
-    // 翻页：滚到底触发下一页，直到收够或无新增
-    let stagnant = 0;
-    for (let i = 0; i < 30 && arts.length < limit && stagnant < 3; i++) {
-      const before = arts.length;
-      await p.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-      await p.waitForTimeout(1500);
-      stagnant = arts.length === before ? stagnant + 1 : 0;
+    // newContext/newPage/addInitScript 放进 try：storageState 文件损坏等异常时仍能在 finally 关掉浏览器，避免 chromium 进程泄漏。
+    const ctx = await b.newContext({ userAgent: UA, locale: 'zh-CN', storageState: authPath });
+    await ctx.addInitScript(() => { Object.defineProperty(navigator, 'webdriver', { get: () => undefined }); });
+    const p = await ctx.newPage();
+    p.on('response', async r => {
+      // 仅收该画师自己的作品列表（users/{profileId}/artworks），排除登录账号的 dashboard 请求
+      if (r.url().includes(`/api/v1/users/${profileId}/artworks`)) {
+        try {
+          const j = JSON.parse(await r.text());
+          for (const a of j.artworks || []) {
+            if (a.id && a.url && !seen.has(a.id)) {
+              seen.add(a.id);
+              const { author, authorUrl } = extractAuthor(a);
+              arts.push({ mhsId: a.id, imageUrl: a.url, width: a.width ?? null, height: a.height ?? null, author, authorUrl });
+            }
+          }
+        } catch {}
+      }
+    });
+    try {
+      await p.goto(`https://www.mihuashi.com/profiles/${profileId}`, { waitUntil: 'networkidle', timeout: 45000 });
+      await p.waitForTimeout(3000);
+      // 翻页：滚到底触发下一页，直到收够或无新增
+      let stagnant = 0;
+      for (let i = 0; i < 30 && arts.length < limit && stagnant < 3; i++) {
+        const before = arts.length;
+        await p.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+        await p.waitForTimeout(1500);
+        stagnant = arts.length === before ? stagnant + 1 : 0;
+      }
+    } catch (e) {
+      // 超时也返回已收集的
     }
-  } catch (e) {
-    // 超时也返回已收集的
   } finally {
     await b.close();
   }

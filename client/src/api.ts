@@ -233,9 +233,13 @@ export async function fetchReferenceDetail(id: number) {
 // ============ 发现（按画风搜作品，独立于寻源） ============
 export type DiscoverResult = {
   id: number; sessionId: number; platform: string;
-  sourceUrl: string | null; imageUrl: string | null; title: string | null; author: string | null;
+  sourceUrl: string | null; imageUrl: string | null; title: string | null; author: string | null; authorUrl: string | null;
   tags: string[]; allImages: string[] | null; imageHash: string | null; quality: number | null; similarity: number | null;
   tier: 'tier1' | 'tier2' | 'promoted' | 'rejected'; promotedArtworkId: number | null; createdAt: string;
+};
+export type DiscoverArtistGroup = {
+  author: string | null; authorUrl: string | null; platform: string | null;
+  count: number; styleTags: string[]; results: DiscoverResult[];
 };
 export type DiscoverTask = { status: string; done: number; total: number; resultCount: number; mode: 'image' | 'tags'; stats?: any };
 // 发起发现：referenceId(可选) + tags(可选 [{label}]) + platforms
@@ -260,6 +264,10 @@ export async function abortDiscover(sessionId: number) {
 export async function fetchDiscoverResults(sessionId: number, tier?: string): Promise<DiscoverResult[]> {
   const q = tier ? '&tier=' + tier : '';
   const r = await fetch(BASE + '/discover/results?sessionId=' + sessionId + q); if (!r.ok) throw new Error('results failed'); return r.json();
+}
+export async function fetchDiscoverResultsByArtist(sessionId: number, tier?: string): Promise<DiscoverArtistGroup[]> {
+  const q = tier ? '&tier=' + tier : '';
+  const r = await fetch(BASE + '/discover/results-by-artist?sessionId=' + sessionId + q); if (!r.ok) throw new Error('results-by-artist failed'); return r.json();
 }
 export async function reviewDiscover(id: number) {
   const r = await fetch(BASE + '/discover/results/' + id + '/review', { method: 'POST' }); if (!r.ok) throw new Error('review failed'); return r.json();

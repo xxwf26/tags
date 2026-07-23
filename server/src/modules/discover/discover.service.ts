@@ -6,7 +6,7 @@ import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { join, basename } from 'node:path';
 import { db, schema } from '../../database/db.js';
 import { eq, and, desc, isNotNull, inArray } from 'drizzle-orm';
-import { searchMihuashi } from '../crawl/mihuashi.js';
+import { searchMihuashi, fetchMihuashiArtworkAuthor, extractMihuashiArtworkId } from '../crawl/mihuashi.js';
 import { searchXhsByKeyword, downloadImage } from '../crawl/xhs.js';
 import { searchWeiboByKeyword } from '../crawl/weibo.js';
 import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
@@ -38,7 +38,7 @@ const MIHUASHI_TAGS = new Set([
 
 type Recalled = {
   platform: string; imageUrl: string; sourceUrl: string | null;
-  title: string | null; author: string | null; tags: string[]; allImages: string[];
+  title: string | null; author: string | null; authorUrl: string | null; tags: string[]; allImages: string[];
 };
 
 // 正在运行的发现进程（用于终止）。与 search.service 的 runningSearches 对称：sessionId → aborted?
@@ -130,14 +130,15 @@ export class DiscoverService {
           if (platform === 'mihuashi') {
             if (!MIHUASHI_TAGS.has(kw)) { console.error(`[discover] 米画师跳过非官方标签「${kw}」（点不中、只会空跑）`); continue; }
             const arts = await searchMihuashi(kw, perKw);
-            for (const a of arts) pool.push({ platform, imageUrl: a.imageUrl, sourceUrl: `https://www.mihuashi.com/artworks/${a.mhsId}`, title: `米画师·${kw}`, author: null, tags: [kw], allImages: [a.imageUrl] });
+            // 带上作者名+主页(extractAuthor 已尽力提取)——米画师是主力源，作者链是"反查画师"的关键，不能丢
+            for (const a of arts) pool.push({ platform, imageUrl: a.imageUrl, sourceUrl: `https://www.mihuashi.com/artworks/${a.mhsId}`, title: `米画师·${kw}`, author: a.author ?? null, authorUrl: a.authorUrl ?? null, tags: [kw], allImages: [a.imageUrl] });
           } else if (platform === 'weibo') {
             const imgs = await searchWeiboByKeyword(kw, perKw);
-            for (const im of imgs) pool.push({ platform, imageUrl: im.url, sourceUrl: im.sourceUrl || im.url, title: im.title || `微博·${kw}`, author: im.author || null, tags: [kw], allImages: [im.url] });
+            for (const im of imgs) pool.push({ platform, imageUrl: im.url, sourceUrl: im.sourceUrl || im.url, title: im.title || `微博·${kw}`, author: im.author || null, authorUrl: null, tags: [kw], allImages: [im.url] });
           } else if (platform === 'xiaohongshu') {
             if (!xhsCookie) { console.error('[discover] 小红书未配置 XHS_COOKIE，跳过'); continue; }
             const notes = await searchXhsByKeyword(kw, perKw, xhsCookie);
-            for (const n of notes) if (n.images.length) pool.push({ platform, imageUrl: n.images[0], sourceUrl: n.sourceUrl, title: n.title || kw, author: n.author || null, tags: n.xhsTags || [], allImages: n.images });
+            for (const n of notes) if (n.images.length) pool.push({ platform, imageUrl: n.images[0], sourceUrl: n.sourceUrl, title: n.title || kw, author: n.author || null, authorUrl: null, tags: n.xhsTags || [], allImages: n.images });
           }
         } catch (e: any) { console.error(`[discover] ${platform} "${kw}" 召回失败: ${e.message}`); }
       }
@@ -181,7 +182,7 @@ export class DiscoverService {
           stats.aiSkipped++;
           await db.insert(schema.searchResults).values({
             sessionId, referenceImageId: referenceId, platform: r.platform,
-            sourceUrl: r.sourceUrl, imageUrl: r.imageUrl, title: r.title, author: r.author,
+            sourceUrl: r.sourceUrl, imageUrl: r.imageUrl, title: r.title, author: r.author, authorUrl: r.authorUrl,
             tags: r.tags, allImages: r.allImages, imageHash: hash,
             similarity: null, quality: null, isNew: 1, tier: 'tier1',
           });
@@ -200,7 +201,7 @@ export class DiscoverService {
         }
         await db.insert(schema.searchResults).values({
           sessionId, referenceImageId: referenceId, platform: r.platform,
-          sourceUrl: r.sourceUrl, imageUrl: r.imageUrl, title: r.title, author: r.author,
+          sourceUrl: r.sourceUrl, imageUrl: r.imageUrl, title: r.title, author: r.author, authorUrl: r.authorUrl,
           tags: r.tags, allImages: r.allImages, imageHash: hash,
           similarity, quality: gate.quality, isNew: 1, tier: 'tier1',
         });
@@ -265,6 +266,33 @@ export class DiscoverService {
     return rows.sort((a, b) => (b.quality ?? 0) - (a.quality ?? 0) || b.id - a.id);
   }
 
+  // 结果按画师聚合：把一个 session 的结果按 author 归组，产出"候选画师清单"。
+  // 寻源的真实目标常是"找到画这种风格的人"，聚合视图比逐张瀑布流更直达。
+  // 无署名的结果(author 为空，如小红书/微博部分)归到一个"未知作者"组，排在最后。
+  async resultsByArtist(sessionId: number, tier?: string) {
+    const rows = await this.listResults(sessionId, tier); // 复用排序(相似度×质量/质量)
+    const groups = new Map<string, {
+      author: string | null; authorUrl: string | null; platform: string | null;
+      count: number; styleTags: string[]; results: any[];
+    }>();
+    for (const r of rows) {
+      const key = r.author?.trim() || '__unknown__';
+      let g = groups.get(key);
+      if (!g) { g = { author: r.author?.trim() || null, authorUrl: (r as any).authorUrl ?? null, platform: r.platform, count: 0, styleTags: [], results: [] }; groups.set(key, g); }
+      g.count++;
+      g.results.push(r);
+      if (!g.authorUrl && (r as any).authorUrl) g.authorUrl = (r as any).authorUrl;
+      // 风格标签并集(取平台自带 tags，即召回关键词/xhs标签)
+      for (const t of (r.tags as string[] | null) || []) if (t && !g.styleTags.includes(t)) g.styleTags.push(t);
+    }
+    // 有署名的按命中数降序在前，未知作者组固定垫底
+    return [...groups.values()].sort((a, b) => {
+      if (!a.author && b.author) return 1;
+      if (a.author && !b.author) return -1;
+      return b.count - a.count;
+    });
+  }
+
   // 复核：tier1 → tier2
   async review(id: number) {
     await db.update(schema.searchResults).set({ tier: 'tier2' }).where(eq(schema.searchResults.id, id));
@@ -300,8 +328,23 @@ export class DiscoverService {
     const filename = `discover-${id}-${Date.now()}.${ext}`;
     await writeFile(join(uploadsDir, filename), buf);
 
-    // 找/建画师（按署名精确匹配）
-    const artistId = await findOrCreateArtist(result.author, result.platform, result.sourceUrl);
+    // 米画师作品列表接口不返回画师，入库时按需补一次（方案乙）：只对真正要入库的图请求详情，
+    // 省请求、不易触发反爬。同步补——入库虽慢几秒，但结果确定、当场就带画师。
+    let author = result.author;
+    let authorUrl = (result as any).authorUrl as string | null;
+    if (result.platform === 'mihuashi' && !author && result.sourceUrl) {
+      const artId = extractMihuashiArtworkId(result.sourceUrl);
+      if (artId) {
+        const info = await fetchMihuashiArtworkAuthor(artId);
+        author = info.author;
+        authorUrl = info.authorUrl || authorUrl;
+        // 顺便把补到的画师写回 search_result，聚合视图/再次查看也能看到
+        if (author) await db.update(schema.searchResults).set({ author, authorUrl }).where(eq(schema.searchResults.id, id));
+      }
+    }
+
+    // 找/建画师（按署名精确匹配）。links 优先用画师主页(authorUrl)而非作品页(sourceUrl)，便于后续顺主页挖全集
+    const artistId = await findOrCreateArtist(author, result.platform, authorUrl || result.sourceUrl);
 
     const [aw] = await db.insert(schema.artworks).values({
       artistId, title: result.title || null,

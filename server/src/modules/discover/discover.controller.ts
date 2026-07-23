@@ -37,6 +37,12 @@ export class DiscoverController {
     return this.discoverService.listResults(Number(sessionId), tier);
   }
 
+  // 结果按画师聚合：GET /api/discover/results-by-artist?sessionId=X&tier=tier1
+  @Get('results-by-artist')
+  resultsByArtist(@Query('sessionId') sessionId: string, @Query('tier') tier?: string) {
+    return this.discoverService.resultsByArtist(Number(sessionId), tier);
+  }
+
   // 复核
   @Post('results/:id/review')
   review(@Param('id', ParseIntPipe) id: number) { return this.discoverService.review(id); }

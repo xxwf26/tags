@@ -35,7 +35,11 @@ export function ArtworkCard({ art, index, onOpen, onHover }: {
       {/* 底部信息 */}
       <div className="px-2.5 py-2 flex items-center gap-1.5">
         <div className="w-4 h-4 rounded-full bg-xhs shrink-0" />
-        <span className="text-[11px] text-stone-500 truncate flex-1">{art.artistName || '未关联画师'}</span>
+        {art.artistId
+          ? <a href={`/artist/${art.artistId}`} target="_blank" rel="noopener noreferrer"
+              onClick={e => e.stopPropagation()}
+              className="text-[11px] text-stone-500 truncate flex-1 hover:text-xhs hover:underline">{art.artistName || '未命名画师'}</a>
+          : <span className="text-[11px] text-stone-500 truncate flex-1">{art.artistName || '未关联画师'}</span>}
         <span className={`text-[9px] px-1.5 py-0.5 rounded-full shrink-0 ${art.tagStatus === 'confirmed' ? 'text-emerald-600 bg-emerald-50' : 'text-amber-600 bg-amber-50'}`}>
           {art.tagStatus === 'confirmed' ? '已确认' : '待复核'}
         </span>

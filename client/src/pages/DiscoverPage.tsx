@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useReferences, useUploadReference, useStartDiscover, useDiscoverSessions, useDiscoverResults, useDiscoverSessionsList, useReviewDiscover, usePromoteDiscover, useRejectDiscover, useDeleteReference, useAbortDiscover } from '../hooks';
+import { useReferences, useUploadReference, useStartDiscover, useDiscoverSessions, useDiscoverResults, useDiscoverResultsByArtist, useDiscoverSessionsList, useReviewDiscover, usePromoteDiscover, useRejectDiscover, useDeleteReference, useAbortDiscover } from '../hooks';
 import { proxyImg } from '../api';
 
 const PLATFORMS = [
@@ -52,6 +52,7 @@ export function DiscoverPage() {
   const [activeId, setActiveId] = useState<number | null>(() => { const s = loadSessions(); return s[s.length - 1]?.id ?? null; });
   const [viewResult, setViewResult] = useState<any>(null);
   const [viewIdx, setViewIdx] = useState(0);
+  const [resultView, setResultView] = useState<'grid' | 'artist'>('grid'); // 结果视图：逐张瀑布流 / 按画师聚合
 
   // 并行轮询所有 session 的任务状态（running 的自动刷新，完成的停）
   const sessionQueries = useDiscoverSessions(sessions.map(s => s.id));
@@ -61,6 +62,7 @@ export function DiscoverPage() {
   // ok（正常完成）与 failed（被终止）都可能有结果：终止时保留了已完成部分
   const hasResults = activeTask?.status === 'ok' || activeTask?.status === 'failed';
   const resultsQ = useDiscoverResults(hasResults ? (activeId ?? 0) : 0);
+  const byArtistQ = useDiscoverResultsByArtist(hasResults && resultView === 'artist' ? (activeId ?? 0) : 0);
   const historyQ = useDiscoverSessionsList();
   const ref = (refsQ.data ?? []).find(r => r.id === selectedRef);
 
@@ -116,7 +118,10 @@ export function DiscoverPage() {
   };
 
   const anyRunning = sessions.some(s => taskById.get(s.id)?.status === 'running');
-  const results = resultsQ.data ?? [];
+  // hasResults=false（如切到 running 的 session）时 useDiscoverResults 传 0、enabled:false，
+  // react-query 会保留上一个 session 的旧 data；此处用 hasResults 守卫置空，避免结果区张冠李戴。
+  const results = hasResults ? (resultsQ.data ?? []) : [];
+  const artistGroups = hasResults ? (byArtistQ.data ?? []) : [];
   const viewImgs: string[] = viewResult?.allImages?.length ? viewResult.allImages : (viewResult?.imageUrl ? [viewResult.imageUrl] : []);
   useEffect(() => {
     if (!viewResult) return;
@@ -264,7 +269,14 @@ export function DiscoverPage() {
               {activeTask.stats.embedSkipped > 0 && <span className="text-amber-600">⚠ 本次未做视觉精排（CLIP 不可用），仅按质量排序</span>}
             </div>
           )}
-          <div className="text-[13px] text-stone-500 mb-2 px-1">{activeTask.mode === 'image' && !activeTask.stats?.embedSkipped ? '按画风相似度×质量排序' : '按质量分排序'} · {results.length} 张（AI 已过滤广告/照片/低质）</div>
+          <div className="flex items-center justify-between mb-2 px-1">
+            <div className="text-[13px] text-stone-500">{activeTask.mode === 'image' && !activeTask.stats?.embedSkipped ? '按画风相似度×质量排序' : '按质量分排序'} · {results.length} 张（AI 已过滤广告/照片/低质）</div>
+            {/* 视图切换：逐张 / 按画师聚合——寻源常是"找到画这种风格的人" */}
+            <div className="flex gap-1 text-[11px]">
+              <button onClick={() => setResultView('grid')} className={`px-2.5 py-1 rounded-full border ${resultView === 'grid' ? 'bg-xhs text-white border-xhs' : 'bg-white text-stone-500 border-stone-200'}`}>逐张</button>
+              <button onClick={() => setResultView('artist')} className={`px-2.5 py-1 rounded-full border ${resultView === 'artist' ? 'bg-xhs text-white border-xhs' : 'bg-white text-stone-500 border-stone-200'}`}>按画师</button>
+            </div>
+          </div>
           {!results.length && (
             <div className="text-center py-12">
               {activeTask.stats && activeTask.stats.recalled === 0
@@ -274,6 +286,7 @@ export function DiscoverPage() {
                 : <div className="text-stone-400 text-sm">没有符合质量的结果，换个画风或平台试试</div>}
             </div>
           )}
+          {resultView === 'grid' && (
           <div className="masonry columns-2 md:columns-3 lg:columns-4 xl:columns-5 2xl:columns-6">
             {results.map(r => (
               <div key={r.id} className="mb-2.5 break-inside-avoid bg-white rounded-xl overflow-hidden border border-stone-100 card-hover">
@@ -309,6 +322,34 @@ export function DiscoverPage() {
               </div>
             ))}
           </div>
+          )}
+          {resultView === 'artist' && (
+          <div className="space-y-2.5">
+            {byArtistQ.isLoading && <div className="text-center text-stone-400 text-sm py-6">聚合中…</div>}
+            {artistGroups.map((g, gi) => (
+              <div key={g.author || `unknown-${gi}`} className="bg-white rounded-xl border border-stone-100 p-3">
+                <div className="flex items-center gap-2 mb-2 flex-wrap">
+                  <span className="text-[13px] font-medium text-stone-700">{g.author || '未知作者'}</span>
+                  <span className="text-[11px] text-white bg-xhs rounded-full px-2 py-0.5">命中 {g.count}</span>
+                  {g.platform && <span className="text-[10px] text-stone-400">{PLATFORM_LABEL[g.platform] || g.platform}</span>}
+                  {g.authorUrl && <a href={g.authorUrl} target="_blank" rel="noreferrer" className="text-[11px] text-sky-600 hover:underline">主页↗</a>}
+                  {g.styleTags.length > 0 && <span className="text-[10px] text-stone-400">· {g.styleTags.slice(0, 6).join(' / ')}</span>}
+                </div>
+                <div className="flex gap-1.5 overflow-x-auto pb-1">
+                  {g.results.map(r => (
+                    <div key={r.id} className="shrink-0 relative cursor-zoom-in" onClick={() => { setViewResult(r); setViewIdx(0); }}>
+                      <img src={proxyImg(r.imageUrl)} className="h-28 w-auto rounded-lg object-cover" style={{ maxWidth: 160 }}
+                        onError={e => ((e.target as HTMLImageElement).style.opacity = '0.3')} alt="" />
+                      {r.similarity != null && <span className="absolute top-1 right-1 text-[9px] px-1 py-0.5 rounded bg-xhs/80 text-white">似 {(r.similarity * 100).toFixed(0)}</span>}
+                      {r.tier === 'tier2' && <span className="absolute top-1 left-1 text-[9px] px-1 py-0.5 rounded bg-sky-500/80 text-white">复核</span>}
+                      {r.tier === 'promoted' && <span className="absolute top-1 left-1 text-[9px] px-1 py-0.5 rounded bg-emerald-500/80 text-white">✓</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+          )}
         </div>
       )}
       {!activeTask && sessions.length === 0 && <div className="text-center text-stone-400 text-sm py-10">选画风标签后点搜索，结果会出现在这里（可并行多个）</div>}
