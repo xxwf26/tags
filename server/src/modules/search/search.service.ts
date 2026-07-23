@@ -159,7 +159,6 @@ export class SearchService {
 
     // 目标结果数：达到就停（不浪费 AI 调用）。继续搜索时加上已有结果数。
     const targetResults = 300 + existingInSession.length;
-    let progressTotal = 0, progressProcessed = 0;
 
     let totalResults = existingInSession.length, newResults = 0;
 
