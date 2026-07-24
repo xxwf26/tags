@@ -128,12 +128,13 @@ export class SearchService {
       return d?.code ?? '';
     };
 
-    // 搜索关键词：所有选中标签空格拼接成一个组合关键词——平台搜索引擎直接返回兼具所有标签的帖，
-    // 比逐个搜再 AI 过滤快得多（召回少但精准，AI 调用减少 50%+）。继续搜索用同样关键词（去重保证不重复）。
-    const allLabels = body.tags.map((t: any) => t.label).filter(Boolean);
-    const searchKeywords = [allLabels.join(' ')];
-    // 所有标签都做 AI 过滤确认（平台搜索可能不完美，AI 再验一遍）
-    const filterTags = allLabels;
+    // 搜索关键词：用 genre 画风标签搜（召回量大），非 genre 标签由 AI 打标后过滤
+    // 不用组合关键词（"水墨 工笔"）——XHS/微博搜索多词效果差，召回太少
+    const mustGenreTags = body.tags.filter((t: any) => t.mode === 'must' && rootCodeOf(t.dimensionId) === 'genre');
+    const allGenreTags = body.tags.filter((t: any) => rootCodeOf(t.dimensionId) === 'genre');
+    const searchKeywords = (mustGenreTags.length ? mustGenreTags : allGenreTags).map((t: any) => t.label);
+    // 非 genre 标签 → AI 打标后过滤（兼具多个标签）
+    const filterTags = body.tags.filter((t: any) => rootCodeOf(t.dimensionId) !== 'genre').map((t: any) => t.label);
     // fuzzyRatio 控制严格度：1.0=必须全部命中，0.5=至少命中一半
     const requiredMatchCount = Math.ceil(filterTags.length * fuzzyRatio);
     const checkTagFilter = (aiTags: any[]): boolean => {
