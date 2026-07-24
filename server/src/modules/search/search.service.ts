@@ -19,6 +19,8 @@ const runningSearches = new Map<number, boolean>(); // sessionId → aborted?
 
 const MIN_QUALITY = 5; // AI 质检质量分下限
 const SIM_FLOOR = 0.2; // CLIP 相似度下限（很宽松，只砍明显不相干）
+// 文字预筛黑名单：标题/标签含这些词的帖子明显不是绘画作品，跳过不浪费 AI 调用（小红书+微博共用）
+const NON_ART_TEXT = ['穿搭','美食','旅游','健身','减肥','化妆','护肤','发型','美甲','自拍','日常','vlog','探店','测评','开箱','装修','家居','宠物','猫','狗','宝宝','育儿','婚礼','毕业','生日','聚会','打卡','旅行','酒店','机票','购物','好物','种草','清单','攻略','教程','菜谱','食谱','运动','跑步','瑜伽','舞蹈','唱歌','翻唱','游戏','直播','抽奖','送','福利','红包','兼职','招聘','租房','二手房','买车','学车','考','证','报','课','AI绘画','AI生成','AI画','Midjourney','midjourney','Stable Diffusion','stable diffusion','SD生成','NovelAI','novelai','DALL-E','dalle','AI插画','AI创作','AI绘图','AI绘图工具','咒语','prompt分享','提示词','正向提示','负向提示','模型分享','LoRA','lora','ControlNet','comfyui','ComfyUI','webui','炼丹','跑图','出图','垫图','图生图','文生图','cosplay','Cosplay','COS','手办','周边','开箱','新闻','热搜','八卦','明星','综艺','电视剧','电影','影评','追剧','演唱会','综艺','选秀','偶像','粉丝','应援','带货','电商','优惠','折扣','秒杀','拼团','团购'];
 
 export class SearchService {
   // 终止搜索
@@ -193,7 +195,6 @@ export class SearchService {
                 if (!n.images.length) { skipNotArt++; continue; }
                 // 文字预筛：标题/标签明显与绘画无关的跳过（不浪费AI调用）
                 const noteText = (n.title || '') + ' ' + (n.xhsTags || []).join(' ');
-                const NON_ART_TEXT = ['穿搭','美食','旅游','健身','减肥','化妆','护肤','发型','美甲','自拍','日常','vlog','探店','测评','开箱','装修','家居','宠物','猫','狗','宝宝','育儿','婚礼','毕业','生日','聚会','打卡','旅行','酒店','机票','购物','好物','种草','清单','攻略','教程','菜谱','食谱','运动','跑步','瑜伽','舞蹈','唱歌','翻唱','游戏','直播','抽奖','送','福利','红包','兼职','招聘','租房','二手房','买车','学车','考','证','报','课','AI绘画','AI生成','AI画','Midjourney','midjourney','Stable Diffusion','stable diffusion','SD生成','NovelAI','novelai','DALL-E','dalle','AI插画','AI创作','AI绘图','AI绘图工具','咒语','prompt分享','提示词','正向提示','负向提示','模型分享','LoRA','lora','ControlNet','comfyui','ComfyUI','webui','炼丹','跑图','出图','垫图','图生图','文生图'];
                 if (NON_ART_TEXT.some(kw => noteText.includes(kw))) { skipNotArt++; continue; }
                 let isArtwork = false;
                 let quality = 0;
@@ -288,6 +289,8 @@ export class SearchService {
               let aiTags: any[] = [];
               let imageHash: string | null = null;
               let buf: Buffer | null = null;
+              // 文字预筛：微博标题明显与绘画无关的跳过（同小红书，不浪费 AI 调用）
+              if (im.title && NON_ART_TEXT.some(kw => im.title!.includes(kw))) { skipNotArt++; continue; }
               try {
                 const downloaded = await downloadImage(im.url);
                 buf = downloaded.buf;
