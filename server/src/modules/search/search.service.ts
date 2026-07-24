@@ -242,8 +242,7 @@ export class SearchService {
                   try {
                     const uploadsDir = join(process.cwd(), 'uploads');
                     await mkdir(uploadsDir, { recursive: true });
-                    const ext = type.includes('png') ? 'png' : type.includes('webp') ? 'webp' : 'jpg';
-                    const filename = `search-${sessionId}-${progressProcessed}.${ext}`;
+                    const filename = `search-${sessionId}-${progressProcessed}.jpg`;
                     await writeFile(join(uploadsDir, filename), buf);
                     localImageUrl = `/uploads/${filename}`;
                   } catch (e: any) { console.error(`[search] 保存图片失败: ${e.message}`); }
@@ -353,8 +352,7 @@ export class SearchService {
                 try {
                   const uploadsDir = join(process.cwd(), 'uploads');
                   await mkdir(uploadsDir, { recursive: true });
-                  const ext = type.includes('png') ? 'png' : type.includes('webp') ? 'webp' : 'jpg';
-                  const filename = `search-${sessionId}-${progressProcessed}.${ext}`;
+                  const filename = `search-${sessionId}-${progressProcessed}.jpg`;
                   await writeFile(join(uploadsDir, filename), buf);
                   localImageUrl = `/uploads/${filename}`;
                 } catch (e: any) { console.error(`[search] 微博图片保存失败: ${e.message}`); }
