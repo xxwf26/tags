@@ -1,7 +1,7 @@
 // 寻源搜索：参考图标签 → 小红书/微博搜索 → 结果存三级库 → 复核 → 正式入库
 // 平台范围：小红书（SSR + 文字预筛 + AI 双模型质检 + 增量写）、微博（关键词搜 + AI 单模型质检）
 // CLIP：参考图 image 模式下给结果算视觉相似度，按相似度排序（worker 不可用则降级为纯质量排序）
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { db, schema } from '../../database/db.js';
 import { eq, and, desc, inArray, isNotNull, sql } from 'drizzle-orm';
@@ -236,6 +236,18 @@ export class SearchService {
                   if (similarity !== null && similarity < SIM_FLOOR) { skipLowQ++; continue; }
                 }
                 kept++;
+                // 保存图片到本地（外站 CDN URL 会过期，本地存一份永久可看）
+                let localImageUrl = n.images[0] || null;
+                if (buf) {
+                  try {
+                    const uploadsDir = join(process.cwd(), 'uploads');
+                    await mkdir(uploadsDir, { recursive: true });
+                    const ext = type.includes('png') ? 'png' : type.includes('webp') ? 'webp' : 'jpg';
+                    const filename = `search-${sessionId}-${progressProcessed}.${ext}`;
+                    await writeFile(join(uploadsDir, filename), buf);
+                    localImageUrl = `/uploads/${filename}`;
+                  } catch (e: any) { console.error(`[search] 保存图片失败: ${e.message}`); }
+                }
                 // 增量写入：每筛选完一张立即写 DB
                 const dedupKey = n.sourceUrl || n.images[0] || '';
                 const isNew = !prevUrls.has(dedupKey) && !(imageHash && prevHashes.has(imageHash));
@@ -244,7 +256,7 @@ export class SearchService {
                   referenceImageId: body.referenceId,
                   platform: 'xiaohongshu',
                   sourceUrl: n.sourceUrl || null,
-                  imageUrl: n.images[0] || null,
+                  imageUrl: localImageUrl,
                   allImages: n.images,
                   aiTags: aiTags.length ? aiTags : null,
                   imageHash: imageHash || null,
@@ -335,6 +347,18 @@ export class SearchService {
                 if (!skipped && similarity !== null && similarity < SIM_FLOOR) { skipLowQ++; continue; }
               }
               kept++;
+              // 保存图片到本地（微博 sinaimg CDN URL 会过期，本地存一份永久可看）
+              let localImageUrl = im.url;
+              if (buf) {
+                try {
+                  const uploadsDir = join(process.cwd(), 'uploads');
+                  await mkdir(uploadsDir, { recursive: true });
+                  const ext = type.includes('png') ? 'png' : type.includes('webp') ? 'webp' : 'jpg';
+                  const filename = `search-${sessionId}-${progressProcessed}.${ext}`;
+                  await writeFile(join(uploadsDir, filename), buf);
+                  localImageUrl = `/uploads/${filename}`;
+                } catch (e: any) { console.error(`[search] 微博图片保存失败: ${e.message}`); }
+              }
               const sourceUrl = im.sourceUrl || (im.noteId ? `https://m.weibo.cn/status/${im.noteId}` : im.url);
               const isNew = !prevUrls.has(sourceUrl) && !(imageHash && prevHashes.has(imageHash));
               await db.insert(schema.searchResults).values({
@@ -342,7 +366,7 @@ export class SearchService {
                 referenceImageId: body.referenceId,
                 platform: 'weibo',
                 sourceUrl,
-                imageUrl: im.url,
+                imageUrl: localImageUrl,
                 allImages: [im.url],
                 imageHash: imageHash || null,
                 aiTags: aiTags.length ? aiTags : null,
