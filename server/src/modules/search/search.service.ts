@@ -9,7 +9,7 @@ import { searchXhsByKeyword, downloadImage } from '../crawl/xhs.js';
 import { searchWeiboByKeyword } from '../crawl/weibo.js';
 import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
 import { logOperation } from '../operation/op.js';
-import { loadTaxonomy, extractJson, normalizeOutput, callBoth, callGemini, isAiConfigured } from '../tagging/ai.js';
+import { loadTaxonomy, extractJson, normalizeOutput, callBoth, callGemini, gateArtwork, isAiConfigured } from '../tagging/ai.js';
 import { embedImage, cosine, isEmbedAvailable } from '../embed/clip.js';
 import { SettingsService } from '../settings/settings.service.js';
 import { promoteSearchResult } from '../support/promote-helpers.js';
@@ -212,21 +212,22 @@ export class SearchService {
                   }
                   const b64 = buf!.toString('base64');
                   const mime = 'image/jpeg';
+                  // 两步AI：①短prompt质检(1秒) → ②通过才长prompt打标(3-5秒)
+                  // 非绘画帖只花1秒排除，不再浪费3-5秒长prompt
+                  const gate = await gateArtwork(b64, mime);
+                  isArtwork = gate.isArtwork;
+                  quality = gate.quality;
+                  if (!isArtwork || quality < MIN_QUALITY) { if (!isArtwork) skipNotArt++; else skipLowQ++; return; }
+                  // 通过质检的才打标（长prompt，用于标签过滤）
                   const gemini = await callGemini(b64, mime, tax.prompt);
                   const gParsed = extractJson(gemini);
-                  isArtwork = gParsed?.is_artwork === true;
-                  quality = Number(gParsed?.quality) || 0;
-                  if (isArtwork) {
-                    const gIds = normalizeOutput(gParsed, tax.labelMap);
-                    const allIds = new Set([...gIds]);
-                    const tagRows = allIds.size ? await db.select().from(schema.tags).where(inArray(schema.tags.id, [...allIds])) : [];
-                    aiTags = tagRows.map(t => ({ tagId: t.id, label: t.label, dimensionId: t.dimensionId, rootCode: rootCodeOf(t.dimensionId) }));
-                  }
+                  const gIds = normalizeOutput(gParsed, tax.labelMap);
+                  const allIds = new Set([...gIds]);
+                  const tagRows = allIds.size ? await db.select().from(schema.tags).where(inArray(schema.tags.id, [...allIds])) : [];
+                  aiTags = tagRows.map(t => ({ tagId: t.id, label: t.label, dimensionId: t.dimensionId, rootCode: rootCodeOf(t.dimensionId) }));
                 } catch (e: any) {
                   console.error(`[search] AI判断失败 "${n.title?.slice(0, 20)}": ${e.message}`);
                 }
-                if (!isArtwork) { skipNotArt++; return; }
-                if (quality < MIN_QUALITY) { skipLowQ++; return; }
                 if (filterTags.length && !checkTagFilter(aiTags)) { skipLowQ++; return; }
                 let similarity: number | null = null;
                 if (useClip && buf) {
@@ -316,16 +317,19 @@ export class SearchService {
                 }
                 if (isAiConfigured() && tax) {
                   const b64 = buf.toString('base64');
+                  // 两步AI：①短prompt质检(1秒) → ②通过才长prompt打标(3-5秒)
+                  // 非绘画帖只花1秒排除，不再浪费3-5秒长prompt
+                  const gate = await gateArtwork(b64, type);
+                  isArtwork = gate.isArtwork;
+                  quality = gate.quality;
+                  if (!isArtwork || quality < MIN_QUALITY) { if (!isArtwork) skipNotArt++; else skipLowQ++; return; }
+                  // 通过质检的才打标（长prompt，用于标签过滤）
                   const gemini = await callGemini(b64, type, tax.prompt);
                   const gParsed = extractJson(gemini);
-                  isArtwork = gParsed?.is_artwork === true;
-                  quality = Number(gParsed?.quality) || 0;
-                  if (isArtwork) {
-                    const gIds = normalizeOutput(gParsed, tax.labelMap);
-                    const allIds = new Set([...gIds]);
-                    const tagRows = allIds.size ? await db.select().from(schema.tags).where(inArray(schema.tags.id, [...allIds])) : [];
-                    aiTags = tagRows.map(t => ({ tagId: t.id, label: t.label, dimensionId: t.dimensionId }));
-                  }
+                  const gIds = normalizeOutput(gParsed, tax.labelMap);
+                  const allIds = new Set([...gIds]);
+                  const tagRows = allIds.size ? await db.select().from(schema.tags).where(inArray(schema.tags.id, [...allIds])) : [];
+                  aiTags = tagRows.map(t => ({ tagId: t.id, label: t.label, dimensionId: t.dimensionId }));
                 } else {
                   skipped = true;
                 }
