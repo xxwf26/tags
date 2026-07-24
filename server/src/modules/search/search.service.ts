@@ -269,6 +269,7 @@ export class SearchService {
                 console.log(`[search] 进度: ${progressProcessed}/${progressTotal} 已处理，保留 ${kept} 张（非绘画 ${skipNotArt}，低质 ${skipLowQ}，重复 ${skipDup}）`);
               }
               console.log(`[search] 小红书 "${kw}" 筛选完成: 保留 ${kept}，非绘画 ${skipNotArt}，低质 ${skipLowQ}，重复 ${skipDup}`);
+            }
           }
         } else if (platform === 'weibo') {
           const tax = isAiConfigured() ? await loadTaxonomy() : null;
