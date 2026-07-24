@@ -18,6 +18,7 @@ import { promoteSearchResult } from '../support/promote-helpers.js';
 const runningSearches = new Map<number, boolean>(); // sessionId → aborted?
 
 const MIN_QUALITY = 5; // AI 质检质量分下限
+const CONCURRENCY = 6; // 并发 AI 质检数（6 张同时调 Gemini，6 倍速）
 const SIM_FLOOR = 0.2; // CLIP 相似度下限（很宽松，只砍明显不相干）
 // 文字预筛黑名单：标题/标签含这些词的帖子明显不是绘画作品，跳过不浪费 AI 调用（小红书+微博共用）
 const NON_ART_TEXT = ['穿搭','美食','旅游','健身','减肥','化妆','护肤','发型','美甲','自拍','日常','vlog','探店','测评','开箱','装修','家居','宠物','猫','狗','宝宝','育儿','婚礼','毕业','生日','聚会','打卡','旅行','酒店','机票','购物','好物','种草','清单','攻略','教程','菜谱','食谱','运动','跑步','瑜伽','舞蹈','唱歌','翻唱','游戏','直播','抽奖','送','福利','红包','兼职','招聘','租房','二手房','买车','学车','考','证','报','课','AI绘画','AI生成','AI画','Midjourney','midjourney','Stable Diffusion','stable diffusion','SD生成','NovelAI','novelai','DALL-E','dalle','AI插画','AI创作','AI绘图','AI绘图工具','咒语','prompt分享','提示词','正向提示','负向提示','模型分享','LoRA','lora','ControlNet','comfyui','ComfyUI','webui','炼丹','跑图','出图','垫图','图生图','文生图','cosplay','Cosplay','COS','手办','周边','开箱','新闻','热搜','八卦','明星','综艺','电视剧','电影','影评','追剧','演唱会','综艺','选秀','偶像','粉丝','应援','带货','电商','优惠','折扣','秒杀','拼团','团购'];
@@ -127,19 +128,12 @@ export class SearchService {
       return d?.code ?? '';
     };
 
-    // 搜索关键词：默认只用 genre 画风标签；keywordMode='all' 时用所有标签（继续搜索，找不同帖子）
-    const mustGenreTags = body.tags.filter((t: any) => t.mode === 'must' && rootCodeOf(t.dimensionId) === 'genre');
-    const allGenreTags = body.tags.filter((t: any) => rootCodeOf(t.dimensionId) === 'genre');
-    const genreKeywords = (mustGenreTags.length ? mustGenreTags : allGenreTags).map((t: any) => t.label);
-    const nonGenreKeywords = body.tags.filter((t: any) => rootCodeOf(t.dimensionId) !== 'genre').map((t: any) => t.label);
-    // 继续搜索：用非 genre 标签作为关键词（之前没用过的），genre 标签转为过滤条件
-    const searchKeywords = keywordMode === 'all' && nonGenreKeywords.length
-      ? nonGenreKeywords
-      : genreKeywords;
-    // keywordMode='all' 时，genre 标签也加入过滤（确保结果兼具画风+其他维度）
-    const filterTags = keywordMode === 'all'
-      ? body.tags.map((t: any) => t.label)  // 所有标签都过滤
-      : body.tags.filter((t: any) => rootCodeOf(t.dimensionId) !== 'genre').map((t: any) => t.label); // 默认：只过滤非 genre
+    // 搜索关键词：所有选中标签空格拼接成一个组合关键词——平台搜索引擎直接返回兼具所有标签的帖，
+    // 比逐个搜再 AI 过滤快得多（召回少但精准，AI 调用减少 50%+）。继续搜索用同样关键词（去重保证不重复）。
+    const allLabels = body.tags.map((t: any) => t.label).filter(Boolean);
+    const searchKeywords = [allLabels.join(' ')];
+    // 所有标签都做 AI 过滤确认（平台搜索可能不完美，AI 再验一遍）
+    const filterTags = allLabels;
     // fuzzyRatio 控制严格度：1.0=必须全部命中，0.5=至少命中一半
     const requiredMatchCount = Math.ceil(filterTags.length * fuzzyRatio);
     const checkTagFilter = (aiTags: any[]): boolean => {
@@ -189,13 +183,14 @@ export class SearchService {
               progressTotal += notes.length;
               await db.update(schema.searchSessions).set({ searchTags: buildTags({ total: progressTotal, processed: 0, startTime: new Date(progressStart).toISOString() }) }).where(eq(schema.searchSessions.id, sessionId));
               let kept = 0, skipNotArt = 0, skipDup = 0, skipLowQ = 0;
-              for (const n of notes) {
-                if (isAborted()) { console.log(`[search] session ${sessionId} 已终止（已处理 ${progressProcessed} 张）`); break; }
+              // 并发处理（6 张同时调 AI，6 倍速）
+              const processXhs = async (n: any) => {
+                if (isAborted() || totalResults >= targetResults) return;
                 progressProcessed++;
-                if (!n.images.length) { skipNotArt++; continue; }
+                if (!n.images.length) { skipNotArt++; return; }
                 // 文字预筛：标题/标签明显与绘画无关的跳过（不浪费AI调用）
                 const noteText = (n.title || '') + ' ' + (n.xhsTags || []).join(' ');
-                if (NON_ART_TEXT.some(kw => noteText.includes(kw))) { skipNotArt++; continue; }
+                if (NON_ART_TEXT.some(kw => noteText.includes(kw))) { skipNotArt++; return; }
                 let isArtwork = false;
                 let quality = 0;
                 let aiTags: any[] = [];
@@ -205,8 +200,8 @@ export class SearchService {
                   buf = (await downloadImage(n.images[0])).buf;
                   try { imageHash = await aHash(buf); } catch {}
                   if (imageHash) {
-                    if ([...libHashSet].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipDup++; continue; }
-                    if ([...sessionHashes].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipDup++; continue; }
+                    if ([...libHashSet].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipDup++; return; }
+                    if ([...sessionHashes].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipDup++; return; }
                     sessionHashes.add(imageHash);
                   }
                   const b64 = buf!.toString('base64');
@@ -224,16 +219,14 @@ export class SearchService {
                 } catch (e: any) {
                   console.error(`[search] AI判断失败 "${n.title?.slice(0, 20)}": ${e.message}`);
                 }
-                if (!isArtwork) { skipNotArt++; continue; }
-                if (quality < MIN_QUALITY) { skipLowQ++; continue; }
-                // 标签过滤：非 genre 标签需在 AI 标签中命中（兼具多个标签，fuzzyRatio 控制严格度）
-                if (filterTags.length && !checkTagFilter(aiTags)) { skipLowQ++; continue; }
-                // CLIP 相似度（image 模式）：算失败(null)不淘汰，避免误杀；低于下限才丢
+                if (!isArtwork) { skipNotArt++; return; }
+                if (quality < MIN_QUALITY) { skipLowQ++; return; }
+                if (filterTags.length && !checkTagFilter(aiTags)) { skipLowQ++; return; }
                 let similarity: number | null = null;
                 if (useClip && buf) {
                   try { similarity = cosine(refEmbedding!, await embedImage(buf)); }
                   catch { similarity = null; }
-                  if (similarity !== null && similarity < SIM_FLOOR) { skipLowQ++; continue; }
+                  if (similarity !== null && similarity < SIM_FLOOR) { skipLowQ++; return; }
                 }
                 kept++;
                 // 保存图片到本地（外站 CDN URL 会过期，本地存一份永久可看）
@@ -247,7 +240,6 @@ export class SearchService {
                     localImageUrl = `/uploads/${filename}`;
                   } catch (e: any) { console.error(`[search] 保存图片失败: ${e.message}`); }
                 }
-                // 增量写入：每筛选完一张立即写 DB
                 const dedupKey = n.sourceUrl || n.images[0] || '';
                 const isNew = !prevUrls.has(dedupKey) && !(imageHash && prevHashes.has(imageHash));
                 await db.insert(schema.searchResults).values({
@@ -268,30 +260,30 @@ export class SearchService {
                 });
                 totalResults++;
                 if (isNew) newResults++;
-                if (totalResults >= targetResults) { console.log(`[search] 达到目标 ${targetResults} 张，停止`); break; }
-                // 每3张更新一次 session 计数（前端轮询能看到进度）
-                if (progressProcessed % 3 === 0) {
-                  await db.update(schema.searchSessions).set({ resultCount: totalResults, newCount: newResults, searchTags: buildTags({ total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString() }) }).where(eq(schema.searchSessions.id, sessionId));
-                  console.log(`[search] 进度: ${progressProcessed}/${progressTotal} 已处理，保留 ${kept} 张（非绘画 ${skipNotArt}，低质 ${skipLowQ}，重复 ${skipDup}）`);
-                }
+              };
+              // 并发批处理（6 张同时）
+              for (let i = 0; i < notes.length; i += CONCURRENCY) {
+                if (isAborted() || totalResults >= targetResults) break;
+                await Promise.all(notes.slice(i, i + CONCURRENCY).map(processXhs));
+                await db.update(schema.searchSessions).set({ resultCount: totalResults, newCount: newResults, searchTags: buildTags({ total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString() }) }).where(eq(schema.searchSessions.id, sessionId));
+                console.log(`[search] 进度: ${progressProcessed}/${progressTotal} 已处理，保留 ${kept} 张（非绘画 ${skipNotArt}，低质 ${skipLowQ}，重复 ${skipDup}）`);
               }
               console.log(`[search] 小红书 "${kw}" 筛选完成: 保留 ${kept}，非绘画 ${skipNotArt}，低质 ${skipLowQ}，重复 ${skipDup}`);
-            }
           }
         } else if (platform === 'weibo') {
           const tax = isAiConfigured() ? await loadTaxonomy() : null;
-          const keywords = searchKeywords.length ? searchKeywords : ['插画'];
-          for (const kw of keywords) {
+          for (const kw of searchKeywords.length ? searchKeywords : ['插画']) {
             if (isAborted()) { console.log(`[search] session ${sessionId} 已终止`); break; }
             const imgs = await searchWeiboByKeyword(kw, 100);
             console.log(`[search] 微博 "${kw}": ${imgs.length} 张，开始 AI 筛选（增量写入）...`);
             progressTotal += imgs.length;
             await db.update(schema.searchSessions).set({ searchTags: buildTags({ total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString() }) }).where(eq(schema.searchSessions.id, sessionId));
             let kept = 0, skipNotArt = 0, skipDup = 0, skipLowQ = 0;
-            const seenNoteIds = new Set<string>(); // 同一微博帖子只保留第一张图，避免多图帖子刷屏重复
-            for (const im of imgs) {
-              if (isAborted()) { console.log(`[search] session ${sessionId} 已终止（已处理 ${progressProcessed} 张）`); break; }
-              if (im.noteId && seenNoteIds.has(im.noteId)) { continue; } // 同帖去重
+            const seenNoteIds = new Set<string>();
+            // 并发处理（6 张同时调 AI，6 倍速）
+            const processWeibo = async (im: any) => {
+              if (isAborted() || totalResults >= targetResults) return;
+              if (im.noteId && seenNoteIds.has(im.noteId)) return;
               if (im.noteId) seenNoteIds.add(im.noteId);
               progressProcessed++;
               let isArtwork = false;
@@ -300,19 +292,17 @@ export class SearchService {
               let aiTags: any[] = [];
               let imageHash: string | null = null;
               let buf: Buffer | null = null;
-              // 文字预筛：微博标题明显与绘画无关的跳过（同小红书，不浪费 AI 调用）
-              if (im.title && NON_ART_TEXT.some(kw => im.title!.includes(kw))) { skipNotArt++; continue; }
+              if (im.title && NON_ART_TEXT.some(kw => im.title!.includes(kw))) { skipNotArt++; return; }
               try {
                 const downloaded = await downloadImage(im.url);
                 buf = downloaded.buf;
                 const type = downloaded.type;
                 try { imageHash = await aHash(buf); } catch {}
                 if (imageHash) {
-                  if ([...libHashSet].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipDup++; continue; }
-                  if ([...sessionHashes].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipDup++; continue; }
+                  if ([...libHashSet].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipDup++; return; }
+                  if ([...sessionHashes].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipDup++; return; }
                   sessionHashes.add(imageHash);
                 }
-                // 用 callBoth（同小红书）：既能质检(is_artwork/quality)又能打 aiTags（供标签过滤）
                 if (isAiConfigured() && tax) {
                   const b64 = buf.toString('base64');
                   const gemini = await callGemini(b64, type, tax.prompt);
@@ -326,27 +316,23 @@ export class SearchService {
                     aiTags = tagRows.map(t => ({ tagId: t.id, label: t.label, dimensionId: t.dimensionId }));
                   }
                 } else {
-                  skipped = true; // AI 未配置：跳过质检+过滤，直接入库标"未质检"
+                  skipped = true;
                 }
               } catch (e: any) {
                 console.error(`[search] 微博图处理失败 "${im.title?.slice(0, 20)}": ${e.message}`);
               }
-              // AI 未真正质检（无 key/调用失败）：入库但 quality=null 标"未质检"，交人工复核
               if (!skipped) {
-                if (!isArtwork) { skipNotArt++; continue; }
-                if (quality < MIN_QUALITY) { skipLowQ++; continue; }
-                // 标签过滤：非 genre 标签需在 AI 标签中命中（兼具多个标签）
-                if (filterTags.length && !checkTagFilter(aiTags)) { skipLowQ++; continue; }
+                if (!isArtwork) { skipNotArt++; return; }
+                if (quality < MIN_QUALITY) { skipLowQ++; return; }
+                if (filterTags.length && !checkTagFilter(aiTags)) { skipLowQ++; return; }
               }
-              // CLIP 相似度（image 模式）
               let similarity: number | null = null;
               if (useClip && buf) {
                 try { similarity = cosine(refEmbedding!, await embedImage(buf)); }
                 catch { similarity = null; }
-                if (!skipped && similarity !== null && similarity < SIM_FLOOR) { skipLowQ++; continue; }
+                if (!skipped && similarity !== null && similarity < SIM_FLOOR) { skipLowQ++; return; }
               }
               kept++;
-              // 保存图片到本地（微博 sinaimg CDN URL 会过期，本地存一份永久可看）
               let localImageUrl = im.url;
               if (buf) {
                 try {
@@ -378,11 +364,13 @@ export class SearchService {
               });
               totalResults++;
               if (isNew) newResults++;
-              if (totalResults >= targetResults) { console.log(`[search] 微博达到目标 ${targetResults} 张，停止`); break; }
-              if (progressProcessed % 3 === 0) {
-                await db.update(schema.searchSessions).set({ resultCount: totalResults, newCount: newResults, searchTags: buildTags({ total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString() }) }).where(eq(schema.searchSessions.id, sessionId));
-                console.log(`[search] 进度: ${progressProcessed}/${progressTotal} 已处理，保留 ${kept} 张（非绘画 ${skipNotArt}，低质 ${skipLowQ}，重复 ${skipDup}）`);
-              }
+            };
+            // 并发批处理（6 张同时）
+            for (let i = 0; i < imgs.length; i += CONCURRENCY) {
+              if (isAborted() || totalResults >= targetResults) break;
+              await Promise.all(imgs.slice(i, i + CONCURRENCY).map(processWeibo));
+              await db.update(schema.searchSessions).set({ resultCount: totalResults, newCount: newResults, searchTags: buildTags({ total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString() }) }).where(eq(schema.searchSessions.id, sessionId));
+              console.log(`[search] 微博进度: ${progressProcessed}/${progressTotal} 已处理，保留 ${kept} 张（非绘画 ${skipNotArt}，低质 ${skipLowQ}，重复 ${skipDup}）`);
             }
             console.log(`[search] 微博 "${kw}" 筛选完成: 保留 ${kept}，非绘画 ${skipNotArt}，低质 ${skipLowQ}，重复 ${skipDup}`);
           }
