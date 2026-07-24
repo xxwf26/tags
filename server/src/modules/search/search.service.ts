@@ -133,8 +133,8 @@ export class SearchService {
     const mustGenreTags = body.tags.filter((t: any) => t.mode === 'must' && rootCodeOf(t.dimensionId) === 'genre');
     const allGenreTags = body.tags.filter((t: any) => rootCodeOf(t.dimensionId) === 'genre');
     const searchKeywords = (mustGenreTags.length ? mustGenreTags : allGenreTags).map((t: any) => t.label);
-    // 非 genre 标签 → AI 打标后过滤（兼具多个标签）
-    const filterTags = body.tags.filter((t: any) => rootCodeOf(t.dimensionId) !== 'genre').map((t: any) => t.label);
+    // 所有选中标签都做 AI 过滤（确保结果兼具所有标签，不只搜到就放行）
+    const filterTags = body.tags.map((t: any) => t.label).filter(Boolean);
     // fuzzyRatio 控制严格度：1.0=必须全部命中，0.5=至少命中一半
     const requiredMatchCount = Math.ceil(filterTags.length * fuzzyRatio);
     const checkTagFilter = (aiTags: any[]): boolean => {
