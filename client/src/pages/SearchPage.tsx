@@ -246,7 +246,12 @@ export function SearchPage() {
           <div className="flex gap-4">
             <img src={ref.imageUrl} className="w-32 h-32 object-cover rounded-xl shrink-0" alt="参考图" />
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-stone-700 mb-1">AI 标签（点击选/取消，再点切换必中/模糊）</div>
+              <div className="flex items-center justify-between mb-1">
+                <div className="text-sm font-medium text-stone-700">AI 标签（点击选/取消，再点切换必中/模糊）</div>
+                {selectedIds.length > 0 && (
+                  <button onClick={() => setTagModes({})} className="text-[11px] text-stone-400 hover:text-rose-500 transition-colors">✕ 清除全部（{selectedIds.length}）</button>
+                )}
+              </div>
               <div className="space-y-1.5 max-h-40 overflow-auto">
                 {DIM_ROWS.map(row => {
                   const tags = byDim.get(row.code)?.tags ?? [];
