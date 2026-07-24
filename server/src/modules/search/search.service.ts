@@ -9,7 +9,7 @@ import { searchXhsByKeyword, downloadImage } from '../crawl/xhs.js';
 import { searchWeiboByKeyword } from '../crawl/weibo.js';
 import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
 import { logOperation } from '../operation/op.js';
-import { loadTaxonomy, extractJson, normalizeOutput, callBoth, isAiConfigured } from '../tagging/ai.js';
+import { loadTaxonomy, extractJson, normalizeOutput, callBoth, callGemini, isAiConfigured } from '../tagging/ai.js';
 import { embedImage, cosine, isEmbedAvailable } from '../embed/clip.js';
 import { SettingsService } from '../settings/settings.service.js';
 import { promoteSearchResult } from '../support/promote-helpers.js';
@@ -184,7 +184,7 @@ export class SearchService {
             const tax = await loadTaxonomy();
             for (const kw of keywords) {
               if (isAborted()) { console.log(`[search] session ${sessionId} 已终止`); break; }
-              const notes = await searchXhsByKeyword(kw, 500, xhsCookie);
+              const notes = await searchXhsByKeyword(kw, 300, xhsCookie);
               console.log(`[search] 小红书 "${kw}": ${notes.length} 帖，开始 AI 筛选（增量写入）...`);
               progressTotal += notes.length;
               await db.update(schema.searchSessions).set({ searchTags: buildTags({ total: progressTotal, processed: 0, startTime: new Date(progressStart).toISOString() }) }).where(eq(schema.searchSessions.id, sessionId));
@@ -211,7 +211,7 @@ export class SearchService {
                   }
                   const b64 = buf!.toString('base64');
                   const mime = 'image/jpeg';
-                  const { gemini } = await callBoth(b64, mime, tax.prompt);
+                  const gemini = await callGemini(b64, mime, tax.prompt);
                   const gParsed = extractJson(gemini);
                   isArtwork = gParsed?.is_artwork === true;
                   quality = Number(gParsed?.quality) || 0;
@@ -315,7 +315,7 @@ export class SearchService {
                 // 用 callBoth（同小红书）：既能质检(is_artwork/quality)又能打 aiTags（供标签过滤）
                 if (isAiConfigured() && tax) {
                   const b64 = buf.toString('base64');
-                  const { gemini } = await callBoth(b64, type, tax.prompt);
+                  const gemini = await callGemini(b64, type, tax.prompt);
                   const gParsed = extractJson(gemini);
                   isArtwork = gParsed?.is_artwork === true;
                   quality = Number(gParsed?.quality) || 0;

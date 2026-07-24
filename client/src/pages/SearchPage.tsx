@@ -36,7 +36,7 @@ export function SearchPage() {
   useEffect(() => {
     fetch(BASE + '/settings/xhs-cookie').then(res => res.json()).then(setCookieStatus);
   }, [cookieSaved]);
-  const [fuzzyRatio, setFuzzyRatio] = useState(0.5);
+  const [fuzzyRatio, setFuzzyRatio] = useState(1);
   const [platforms, setPlatforms] = useState<Set<string>>(new Set(['xiaohongshu', 'weibo']));
   const [activeSession, setActiveSession] = useState<number | null>(() => {
     const v = localStorage.getItem(SEARCH_SESSION_KEY); return v ? Number(v) : null;
