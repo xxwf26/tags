@@ -146,8 +146,8 @@ export class SearchService {
     // 取上一次的结果（用于 isNew 判断）
     const prevResults = prevSession ? await db.select().from(schema.searchResults)
       .where(eq(schema.searchResults.sessionId, prevSession)) : [];
-    const prevHashes = new Set(prevResults.map(r => r.imageHash).filter(Boolean));
-    const prevUrls = new Set(prevResults.map(r => r.sourceUrl).filter(Boolean));
+    const prevHashes = new Set<string>(prevResults.map(r => r.imageHash).filter(Boolean) as string[]);
+    const prevUrls = new Set<string>(prevResults.map(r => r.sourceUrl).filter(Boolean) as string[]);
 
     // 共享去重集合：库内已有 hash + 本 session 已有 hash（继续搜索时预加载已有结果，去重）
     const libHashes = (await db.select({ hash: schema.artworks.imageHash })
