@@ -162,6 +162,8 @@ export class SearchService {
       if (r.url) prevUrls.add(r.url);
       if (r.sourceUrl) prevUrls.add(r.sourceUrl);
     }
+    // 本轮搜索内的 sourceUrl 去重（防同帖重复入库，并发处理时尤其需要）
+    const seenSourceUrls = new Set<string>(prevUrls);
 
     // 目标结果数：达到就停（不浪费 AI 调用）。继续搜索时加上已有结果数。
     const targetResults = 300 + existingInSession.length;
@@ -186,6 +188,9 @@ export class SearchService {
               // 并发处理（6 张同时调 AI，6 倍速）
               const processXhs = async (n: any) => {
                 if (isAborted() || totalResults >= targetResults) return;
+                // sourceUrl 去重：同帖只处理一次（防止 XHS 搜索返回重复帖）
+                if (n.sourceUrl && seenSourceUrls.has(n.sourceUrl)) { skipDup++; return; }
+                if (n.sourceUrl) seenSourceUrls.add(n.sourceUrl);
                 progressProcessed++;
                 if (!n.images.length) { skipNotArt++; return; }
                 // 文字预筛：标题/标签明显与绘画无关的跳过（不浪费AI调用）
@@ -286,6 +291,10 @@ export class SearchService {
               if (isAborted() || totalResults >= targetResults) return;
               if (im.noteId && seenNoteIds.has(im.noteId)) return;
               if (im.noteId) seenNoteIds.add(im.noteId);
+              // sourceUrl 去重：同帖只处理一次
+              const wbSrc = im.sourceUrl || (im.noteId ? `https://m.weibo.cn/status/${im.noteId}` : im.url);
+              if (seenSourceUrls.has(wbSrc)) { skipDup++; return; }
+              seenSourceUrls.add(wbSrc);
               progressProcessed++;
               let isArtwork = false;
               let quality = 0;
