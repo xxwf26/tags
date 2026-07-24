@@ -192,7 +192,7 @@ export class SearchService {
                 // sourceUrl 去重：同帖只处理一次（防止 XHS 搜索返回重复帖）
                 if (n.sourceUrl && seenSourceUrls.has(n.sourceUrl)) { skipDup++; return; }
                 if (n.sourceUrl) seenSourceUrls.add(n.sourceUrl);
-                progressProcessed++;
+                const myIdx = ++progressProcessed; // 捕获本任务的序号（并发时不能直接用共享变量做文件名）
                 if (!n.images.length) { skipNotArt++; return; }
                 // 文字预筛：标题/标签明显与绘画无关的跳过（不浪费AI调用）
                 const noteText = (n.title || '') + ' ' + (n.xhsTags || []).join(' ');
@@ -241,7 +241,7 @@ export class SearchService {
                   try {
                     const uploadsDir = join(process.cwd(), 'uploads');
                     await mkdir(uploadsDir, { recursive: true });
-                    const filename = `search-${sessionId}-${progressProcessed}.jpg`;
+                    const filename = `search-${sessionId}-${myIdx}.jpg`;
                     await writeFile(join(uploadsDir, filename), buf);
                     localImageUrl = `/uploads/${filename}`;
                   } catch (e: any) { console.error(`[search] 保存图片失败: ${e.message}`); }
@@ -296,7 +296,7 @@ export class SearchService {
               const wbSrc = im.sourceUrl || (im.noteId ? `https://m.weibo.cn/status/${im.noteId}` : im.url);
               if (seenSourceUrls.has(wbSrc)) { skipDup++; return; }
               seenSourceUrls.add(wbSrc);
-              progressProcessed++;
+              const myIdx = ++progressProcessed; // 捕获本任务的序号（并发时不能直接用共享变量做文件名）
               let isArtwork = false;
               let quality = 0;
               let skipped = false;
@@ -349,7 +349,7 @@ export class SearchService {
                 try {
                   const uploadsDir = join(process.cwd(), 'uploads');
                   await mkdir(uploadsDir, { recursive: true });
-                  const filename = `search-${sessionId}-${progressProcessed}.jpg`;
+                  const filename = `search-${sessionId}-${myIdx}.jpg`;
                   await writeFile(join(uploadsDir, filename), buf);
                   localImageUrl = `/uploads/${filename}`;
                 } catch (e: any) { console.error(`[search] 微博图片保存失败: ${e.message}`); }
