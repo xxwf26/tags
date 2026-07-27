@@ -167,6 +167,18 @@ export class DiscoverService {
     const useClip = mode === 'image' && !!refEmbedding;
     if (mode === 'image' && !refEmbedding) stats.embedSkipped = 1;
 
+    // 落本地：发现流程的图也存 /uploads/，显示不再依赖外站 CDN（米画师大图走代理易超时破图）。
+    // 与寻源 search.service 一致：imageUrl 用本地路径，allImages 保留原始外链。
+    const uploadsDir = join(process.cwd(), 'uploads');
+    let savedIdx = 0;
+    const saveLocal = async (buf: Buffer): Promise<string> => {
+      const myIdx = ++savedIdx;
+      await mkdir(uploadsDir, { recursive: true });
+      const filename = `discover-${sessionId}-${myIdx}.jpg`;
+      await writeFile(join(uploadsDir, filename), buf);
+      return `/uploads/${filename}`;
+    };
+
     // 2) 逐张处理（分批并发）：下载 → 去重 → AI质检 →(image)CLIP相似度 → 写结果
     const processOne = async (r: Recalled) => {
       try {
@@ -180,9 +192,11 @@ export class DiscoverService {
         // AI 没真正质检（无 key / 调用失败）：不伪装成通过，入库但 quality=null 标"未质检"，交人工复核
         if (gate.skipped) {
           stats.aiSkipped++;
+          let localImageUrl = r.imageUrl;
+          try { localImageUrl = await saveLocal(buf); } catch (e: any) { console.error(`[discover] 保存图片失败: ${e.message}`); }
           await db.insert(schema.searchResults).values({
             sessionId, referenceImageId: referenceId, platform: r.platform,
-            sourceUrl: r.sourceUrl, imageUrl: r.imageUrl, title: r.title, author: r.author, authorUrl: r.authorUrl,
+            sourceUrl: r.sourceUrl, imageUrl: localImageUrl, title: r.title, author: r.author, authorUrl: r.authorUrl,
             tags: r.tags, allImages: r.allImages, imageHash: hash,
             similarity: null, quality: null, isNew: 1, tier: 'tier1',
           });
@@ -199,9 +213,11 @@ export class DiscoverService {
           // 相似度下限过滤：明显不相干的砍掉；算失败(null)的不淘汰，避免误杀
           if (similarity !== null && similarity < SIM_FLOOR) { stats.lowSimilarity++; return; }
         }
+        let localImageUrl = r.imageUrl;
+        try { localImageUrl = await saveLocal(buf); } catch (e: any) { console.error(`[discover] 保存图片失败: ${e.message}`); }
         await db.insert(schema.searchResults).values({
           sessionId, referenceImageId: referenceId, platform: r.platform,
-          sourceUrl: r.sourceUrl, imageUrl: r.imageUrl, title: r.title, author: r.author, authorUrl: r.authorUrl,
+          sourceUrl: r.sourceUrl, imageUrl: localImageUrl, title: r.title, author: r.author, authorUrl: r.authorUrl,
           tags: r.tags, allImages: r.allImages, imageHash: hash,
           similarity, quality: gate.quality, isNew: 1, tier: 'tier1',
         });
