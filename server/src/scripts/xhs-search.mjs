@@ -64,7 +64,9 @@ async function searchOneKeyword(keyword) {
           const sourceUrl = xsecToken
             ? `https://www.xiaohongshu.com/explore/${noteId}?xsec_token=${xsecToken}&xsec_source=pc_search`
             : `https://www.xiaohongshu.com/explore/${noteId}`;
-          items.push({ noteId, title, author: nc.user?.nickname || '', sourceUrl, type: nc.type || 'normal', images: allImages, xhsTags });
+          // 提取作者 user_id（拼画师主页链接的地基；主页裸URL即可SSR拿作品，无需token/登录）
+          const authorId = nc.user?.user_id || nc.user?.userId || '';
+          items.push({ noteId, title, author: nc.user?.nickname || '', authorId, sourceUrl, type: nc.type || 'normal', images: allImages, xhsTags });
         }
       } catch {}
     }

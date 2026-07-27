@@ -25,3 +25,21 @@ export function hamming(h1: string, h2: string): number {
 }
 
 export const DEDUP_THRESHOLD = 5; // 海明距离 ≤5 视为近重复
+
+// —— 快速去重原语 ——
+// hamming() 每次比较都对两个 hex 串逐字符 parseInt，300 张 ×900+ 库 hash 全在主线程同步跑会阻塞事件循环。
+// 预解析成 nibble 数组（每 hash 只解析一次），比较时查表 popcount，去掉重复 parseInt。
+const POPCOUNT4 = [0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4];
+
+export function hexToNibbles(h: string): number[] {
+  const a = new Array<number>(h.length);
+  for (let i = 0; i < h.length; i++) a[i] = parseInt(h[i], 16);
+  return a;
+}
+
+export function hammingNib(a: number[], b: number[]): number {
+  if (!a.length || a.length !== b.length) return 999;
+  let d = 0;
+  for (let i = 0; i < a.length; i++) d += POPCOUNT4[a[i] ^ b[i]];
+  return d;
+}

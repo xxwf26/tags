@@ -1,28 +1,32 @@
-// 寻源搜索：参考图标签 → 小红书/微博搜索 → 结果存三级库 → 复核 → 正式入库
-// 平台范围：小红书（SSR + 文字预筛 + AI 双模型质检 + 增量写）、微博（关键词搜 + AI 单模型质检）
-// CLIP：参考图 image 模式下给结果算视觉相似度，按相似度排序（worker 不可用则降级为纯质量排序）
+// 寻源搜索（作者中心）：按画风关键词搜小红书 → 按作者聚合 → 爬每个作者主页判断是不是画师号
+// → 是画师则存其代表作（tier1，供复核入库建联），路人直接丢弃。目的是「找画师建联」，不管单张画风/质量。
+// 微博：新流程不支持（无 authorId / 无主页 SSR 反查），跳过。
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { db, schema } from '../../database/db.js';
 import { eq, and, desc, inArray, isNotNull, sql } from 'drizzle-orm';
-import { searchXhsByKeyword, downloadImage } from '../crawl/xhs.js';
-import { searchWeiboByKeyword } from '../crawl/weibo.js';
+import { searchXhsByKeyword, downloadImage, buildProfileUrl, fetchProfileNotes } from '../crawl/xhs.js';
 import { fetchMihuashiArtworkAuthor, extractMihuashiArtworkId } from '../crawl/mihuashi.js';
-import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
+import { aHash, hexToNibbles, hammingNib, DEDUP_THRESHOLD } from '../imghash/imghash.js';
 import { logOperation } from '../operation/op.js';
-import { loadTaxonomy, extractJson, normalizeOutput, callBoth, callGemini, gateArtwork, isAiConfigured } from '../tagging/ai.js';
-import { embedImage, cosine, isEmbedAvailable } from '../embed/clip.js';
+import { judgeArtistAccount, isAiConfigured } from '../tagging/ai.js';
+import { embedImage, isEmbedAvailable } from '../embed/clip.js';
 import { SettingsService } from '../settings/settings.service.js';
 import { promoteSearchResult } from '../support/promote-helpers.js';
 
 // 正在运行的搜索进程（用于终止）
 const runningSearches = new Map<number, boolean>(); // sessionId → aborted?
 
-const MIN_QUALITY = 5; // AI 质检质量分下限
-const CONCURRENCY = 6; // 并发 AI 质检数（6 张同时调 Gemini，6 倍速）
-const SIM_FLOOR = 0.2; // CLIP 相似度下限（很宽松，只砍明显不相干）
-// 文字预筛黑名单：标题/标签含这些词的帖子明显不是绘画作品，跳过不浪费 AI 调用（小红书+微博共用）
-const NON_ART_TEXT = ['穿搭','美食','旅游','健身','减肥','化妆','护肤','发型','美甲','自拍','日常','vlog','探店','测评','开箱','装修','家居','宠物','猫','狗','宝宝','育儿','婚礼','毕业','生日','聚会','打卡','旅行','酒店','机票','购物','好物','种草','清单','攻略','教程','菜谱','食谱','运动','跑步','瑜伽','舞蹈','唱歌','翻唱','游戏','直播','抽奖','送','福利','红包','兼职','招聘','租房','二手房','买车','学车','考','证','报','课','AI绘画','AI生成','AI画','Midjourney','midjourney','Stable Diffusion','stable diffusion','SD生成','NovelAI','novelai','DALL-E','dalle','AI插画','AI创作','AI绘图','AI绘图工具','咒语','prompt分享','提示词','正向提示','负向提示','模型分享','LoRA','lora','ControlNet','comfyui','ComfyUI','webui','炼丹','跑图','出图','垫图','图生图','文生图','cosplay','Cosplay','COS','手办','周边','开箱','新闻','热搜','八卦','明星','综艺','电视剧','电影','影评','追剧','演唱会','综艺','选秀','偶像','粉丝','应援','带货','电商','优惠','折扣','秒杀','拼团','团购'];
+const ARTIST_CAP = 60;          // 单次最多反查多少个作者主页（按命中次数降序取 TopK，防爬爆/限流）
+const ARTIST_CONCURRENCY = 3;   // 并发爬主页数（低并发防反爬）
+const COVERS_TO_JUDGE = 6;      // 每个作者取主页前 N 张封面给 AI 判是不是画师号
+const WORKS_PER_ARTIST = 6;     // 判定为画师后，存其主页前 N 张作品作为代表作
+const XHS_RECALL = 300;         // 每个关键词召回帖数（用于聚合作者，非逐张处理）
+// 约稿身份词：发这些词的基本是画师本人（或想找画师的甲方，会被"判画师号"兜底剔除）。
+// 用来最大范围捞画师——画风词捞"内容"，约稿词捞"画师身份"，互补。
+const COMMISSION_KEYWORDS = ['约稿', '画师约稿', '接稿', '商稿', '原画师', '插画约稿', 'lof画手', '画手', '稿件'];
+// 文字预筛黑名单：作者昵称/帖子标题含这些词的明显是路人号，聚合阶段就跳过不反查主页（省爬取）
+const NON_ART_TEXT = ['穿搭','美食','旅游','健身','减肥','化妆','护肤','发型','美甲','探店','测评','装修','家居','育儿','婚礼','酒店','机票','好物','种草','攻略','菜谱','食谱','瑜伽','翻唱','带货','电商','团购'];
 
 export class SearchService {
   // 终止搜索
@@ -41,11 +45,12 @@ export class SearchService {
     const referenceId = session.referenceImageId ?? 0;
     const platforms = session.platforms ?? ['xiaohongshu', 'weibo'];
     const fuzzyRatio = (session.searchTags as any)?.fuzzyRatio ?? 0.5;
+    const wideNet = (session.searchTags as any)?.wideNet ?? true;
     // 复用 startSearch 但 keywordMode='all'，不用建新 session——直接改本 session 状态
     runningSearches.set(sessionId, false);
     // 标记为 running（前端看到进度）
     await db.update(schema.searchSessions).set({ status: 'running', doneCount: 0, totalCount: 0 }).where(eq(schema.searchSessions.id, sessionId));
-    this.executeSearch(sessionId, { referenceId, tags, platforms, fuzzyRatio, keywordMode: 'all' }, null, null).catch(e => {
+    this.executeSearch(sessionId, { referenceId, tags, platforms, fuzzyRatio, keywordMode: 'all', wideNet }, null, null).catch(e => {
       console.error(`[search] 继续搜索 session ${sessionId} 失败: ${e.message}`);
       db.update(schema.searchSessions).set({ status: 'failed' }).where(eq(schema.searchSessions.id, sessionId)).then(() => {});
     }).finally(() => { runningSearches.delete(sessionId); });
@@ -58,7 +63,7 @@ export class SearchService {
   async startSearch(body: {
     referenceId: number;
     tags: { tagId: number; label: string; dimensionId: number | null; mode: 'must' | 'fuzzy' }[];
-    platforms?: string[]; fuzzyRatio?: number; keywordMode?: 'genre' | 'all';
+    platforms?: string[]; fuzzyRatio?: number; keywordMode?: 'genre' | 'all'; wideNet?: boolean;
   }) {
     // 先创建 session 返回 sessionId，后台异步执行搜索
     const prevSessions = await db.select().from(schema.searchSessions)
@@ -67,8 +72,8 @@ export class SearchService {
     const [sr] = await db.insert(schema.searchSessions).values({
       referenceImageId: body.referenceId,
       parentSessionId: prevSession,
-      searchTags: { tags: body.tags, fuzzyRatio: body.fuzzyRatio ?? 0.5 },
-      platforms: body.platforms ?? ['xiaohongshu', 'weibo'],
+      searchTags: { tags: body.tags, fuzzyRatio: body.fuzzyRatio ?? 0.5, wideNet: body.wideNet ?? true },
+      platforms: body.platforms ?? ['xiaohongshu'],
       status: 'running',
     });
     const sessionId = (sr as any).insertId;
@@ -102,19 +107,18 @@ export class SearchService {
     const isAborted = () => runningSearches.get(sessionId) === true;
     let progressTotal = 0, progressProcessed = 0;
     const progressStart = Date.now();
-    const platforms = body.platforms ?? ['xiaohongshu', 'weibo'];
-    const useClip = !!refEmbedding;
+    const platforms = body.platforms ?? ['xiaohongshu'];
     const settingsSvc = new SettingsService();
     const xhsCookie = await settingsSvc.getXhsCookie();
     const fuzzyRatio = body.fuzzyRatio ?? 0.5;
-    const keywordMode = body.keywordMode ?? 'genre';
+    const wideNet = body.wideNet ?? true; // 约稿广撒网：并行搜约稿身份词，最大范围捞画师
 
     // 保留会话自定义名字：executeSearch 会整体覆盖 searchTags JSON，若不带上 name
     // 则「改名后继续搜索」会把名字冲掉。开头快照一次，写入时始终带上。
     const [curSession] = await db.select().from(schema.searchSessions).where(eq(schema.searchSessions.id, sessionId));
     const sessionName = (curSession?.searchTags as any)?.name;
     const buildTags = (progress: any) => {
-      const st: any = { tags: body.tags, fuzzyRatio, progress };
+      const st: any = { tags: body.tags, fuzzyRatio, wideNet, progress };
       if (sessionName != null) st.name = sessionName;
       return st;
     };
@@ -129,21 +133,10 @@ export class SearchService {
       return d?.code ?? '';
     };
 
-    // 搜索关键词：用 genre 画风标签搜（召回量大），非 genre 标签由 AI 打标后过滤
-    // 不用组合关键词（"水墨 工笔"）——XHS/微博搜索多词效果差，召回太少
+    // 搜索关键词：用 genre 画风标签搜（召回量大）。用于聚合作者，非逐张处理。
     const mustGenreTags = body.tags.filter((t: any) => t.mode === 'must' && rootCodeOf(t.dimensionId) === 'genre');
     const allGenreTags = body.tags.filter((t: any) => rootCodeOf(t.dimensionId) === 'genre');
     const searchKeywords = (mustGenreTags.length ? mustGenreTags : allGenreTags).map((t: any) => t.label);
-    // 所有选中标签都做 AI 过滤（确保结果兼具所有标签，不只搜到就放行）
-    const filterTags = body.tags.map((t: any) => t.label).filter(Boolean);
-    // fuzzyRatio 控制严格度：1.0=必须全部命中，0.5=至少命中一半
-    const requiredMatchCount = Math.ceil(filterTags.length * fuzzyRatio);
-    const checkTagFilter = (aiTags: any[]): boolean => {
-      if (!filterTags.length || !aiTags.length) return true; // 无过滤标签或无 AI 标签 → 放行
-      const aiLabels = new Set(aiTags.map(t => t.label));
-      const matchCount = filterTags.filter((label: string) => aiLabels.has(label)).length;
-      return matchCount >= requiredMatchCount;
-    };
 
     // 取上一次的结果（用于 isNew 判断）
     const prevResults = prevSession ? await db.select().from(schema.searchResults)
@@ -151,259 +144,168 @@ export class SearchService {
     const prevHashes = new Set<string>(prevResults.map(r => r.imageHash).filter(Boolean) as string[]);
     const prevUrls = new Set<string>(prevResults.map(r => r.sourceUrl).filter(Boolean) as string[]);
 
-    // 共享去重集合：库内已有 hash + 本 session 已有 hash（继续搜索时预加载已有结果，去重）
+    // 作品图去重：库内已有 hash（预解析 nibble 缓存，查表 popcount，避免重复 parseInt 阻塞事件循环）
     const libHashes = (await db.select({ hash: schema.artworks.imageHash })
       .from(schema.artworks).where(isNotNull(schema.artworks.imageHash))).map(a => a.hash).filter(Boolean) as string[];
-    const libHashSet = new Set(libHashes);
-    const sessionHashes = new Set<string>();
-    // 继续搜索：预加载本 session 已有结果的 hash + url，避免重复入库
-    const existingInSession = await db.select({ hash: schema.searchResults.imageHash, url: schema.searchResults.imageUrl, sourceUrl: schema.searchResults.sourceUrl })
+    const libNibs = libHashes.map(hexToNibbles);
+    const sessionNibs: number[][] = []; // 本 session 已存作品图 hash，动态追加
+    const isDup = (nib: number[]): boolean =>
+      libNibs.some(h => hammingNib(nib, h) <= DEDUP_THRESHOLD) ||
+      sessionNibs.some(h => hammingNib(nib, h) <= DEDUP_THRESHOLD);
+
+    // 继续搜索：预加载本 session 已处理过的作者（从 authorUrl 提 user_id）+ 已存作品图 hash，避免重复反查/入库
+    const existingInSession = await db.select({ hash: schema.searchResults.imageHash, sourceUrl: schema.searchResults.sourceUrl, authorUrl: schema.searchResults.authorUrl })
       .from(schema.searchResults).where(eq(schema.searchResults.sessionId, sessionId));
+    const seenAuthorIds = new Set<string>();
+    const profileIdRe = /user\/profile\/([0-9a-zA-Z]+)/;
     for (const r of existingInSession) {
-      if (r.hash) sessionHashes.add(r.hash);
-      if (r.url) prevUrls.add(r.url);
+      if (r.hash) sessionNibs.push(hexToNibbles(r.hash));
       if (r.sourceUrl) prevUrls.add(r.sourceUrl);
+      const m = r.authorUrl?.match(profileIdRe);
+      if (m) seenAuthorIds.add(m[1]);
     }
-    // 本轮搜索内的 sourceUrl 去重（防同帖重复入库，并发处理时尤其需要）
-    const seenSourceUrls = new Set<string>(prevUrls);
 
-    // 目标结果数：达到就停（不浪费 AI 调用）。继续搜索时加上已有结果数。
-    const targetResults = 300 + existingInSession.length;
+    let totalResults = existingInSession.length, newResults = 0, keptArtists = 0;
 
-    let totalResults = existingInSession.length, newResults = 0;
+    // 微博：新流程（作者主页反查画师）不支持，若选了给出提示
+    if (platforms.includes('weibo')) console.log('[search] 微博暂不支持"作者中心找画师"流程，已跳过');
+    if (!platforms.includes('xiaohongshu')) {
+      console.log('[search] 未选择小红书，无可执行平台');
+    } else if (!xhsCookie) {
+      console.error('[search] 小红书: 未配置 XHS_COOKIE，跳过');
+    } else {
+      // 召回关键词：画风词 +（广撒网时）约稿身份词。约稿词标记 commission，供排序加权。
+      const genreKws = (searchKeywords.length ? searchKeywords : ['插画']).map((k: string) => ({ kw: k, commission: false }));
+      const recallKws = wideNet
+        ? [...genreKws, ...COMMISSION_KEYWORDS.map(k => ({ kw: k, commission: true }))]
+        : genreKws;
 
-    for (const platform of platforms) {
-      if (totalResults >= targetResults) break; // 达到目标，不再搜下一个平台
-      try {
-        if (platform === 'xiaohongshu') {
-          if (!xhsCookie) { console.error('[search] 小红书: 未配置 XHS_COOKIE，跳过'); }
-          else {
-            const keywords = searchKeywords.length ? searchKeywords : ['插画'];
-            const tax = await loadTaxonomy();
-            for (const kw of keywords) {
-              if (isAborted()) { console.log(`[search] session ${sessionId} 已终止`); break; }
-              const notes = await searchXhsByKeyword(kw, 300, xhsCookie);
-              console.log(`[search] 小红书 "${kw}": ${notes.length} 帖，开始 AI 筛选（增量写入）...`);
-              progressTotal += notes.length;
-              await db.update(schema.searchSessions).set({ searchTags: buildTags({ total: progressTotal, processed: 0, startTime: new Date(progressStart).toISOString() }) }).where(eq(schema.searchSessions.id, sessionId));
-              let kept = 0, skipNotArt = 0, skipDup = 0, skipLowQ = 0;
-              // 并发处理（6 张同时调 AI，6 倍速）
-              const processXhs = async (n: any) => {
-                if (isAborted() || totalResults >= targetResults) return;
-                // sourceUrl 去重：同帖只处理一次（防止 XHS 搜索返回重复帖）
-                if (n.sourceUrl && seenSourceUrls.has(n.sourceUrl)) { skipDup++; return; }
-                if (n.sourceUrl) seenSourceUrls.add(n.sourceUrl);
-                const myIdx = ++progressProcessed; // 捕获本任务的序号（并发时不能直接用共享变量做文件名）
-                if (!n.images.length) { skipNotArt++; return; }
-                // 文字预筛：标题/标签明显与绘画无关的跳过（不浪费AI调用）
-                const noteText = (n.title || '') + ' ' + (n.xhsTags || []).join(' ');
-                if (NON_ART_TEXT.some(kw => noteText.includes(kw))) { skipNotArt++; return; }
-                let isArtwork = false;
-                let quality = 0;
-                let aiTags: any[] = [];
-                let imageHash: string | null = null;
-                let buf: Buffer | null = null;
-                try {
-                  buf = (await downloadImage(n.images[0])).buf;
-                  try { imageHash = await aHash(buf); } catch {}
-                  if (imageHash) {
-                    if ([...libHashSet].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipDup++; return; }
-                    if ([...sessionHashes].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipDup++; return; }
-                    sessionHashes.add(imageHash);
-                  }
-                  const b64 = buf!.toString('base64');
-                  const mime = 'image/jpeg';
-                  // 两步AI：①短prompt质检(1秒) → ②通过才长prompt打标(3-5秒)
-                  // 非绘画帖只花1秒排除，不再浪费3-5秒长prompt
-                  const gate = await gateArtwork(b64, mime);
-                  isArtwork = gate.isArtwork;
-                  quality = gate.quality;
-                  if (!isArtwork || quality < MIN_QUALITY) { if (!isArtwork) skipNotArt++; else skipLowQ++; return; }
-                  // 通过质检的才打标（长prompt，用于标签过滤）
-                  const gemini = await callGemini(b64, mime, tax.prompt);
-                  const gParsed = extractJson(gemini);
-                  const gIds = normalizeOutput(gParsed, tax.labelMap);
-                  const allIds = new Set([...gIds]);
-                  const tagRows = allIds.size ? await db.select().from(schema.tags).where(inArray(schema.tags.id, [...allIds])) : [];
-                  aiTags = tagRows.map(t => ({ tagId: t.id, label: t.label, dimensionId: t.dimensionId, rootCode: rootCodeOf(t.dimensionId) }));
-                } catch (e: any) {
-                  console.error(`[search] AI判断失败 "${n.title?.slice(0, 20)}": ${e.message}`);
-                }
-                if (filterTags.length && !checkTagFilter(aiTags)) { skipLowQ++; return; }
-                let similarity: number | null = null;
-                if (useClip && buf) {
-                  try { similarity = cosine(refEmbedding!, await embedImage(buf)); }
-                  catch { similarity = null; }
-                  if (similarity !== null && similarity < SIM_FLOOR) { skipLowQ++; return; }
-                }
-                kept++;
-                // 保存图片到本地（外站 CDN URL 会过期，本地存一份永久可看）
-                let localImageUrl = n.images[0] || null;
-                if (buf) {
-                  try {
-                    const uploadsDir = join(process.cwd(), 'uploads');
-                    await mkdir(uploadsDir, { recursive: true });
-                    const filename = `search-${sessionId}-${myIdx}.jpg`;
-                    await writeFile(join(uploadsDir, filename), buf);
-                    localImageUrl = `/uploads/${filename}`;
-                  } catch (e: any) { console.error(`[search] 保存图片失败: ${e.message}`); }
-                }
-                const dedupKey = n.sourceUrl || n.images[0] || '';
-                const isNew = !prevUrls.has(dedupKey) && !(imageHash && prevHashes.has(imageHash));
-                await db.insert(schema.searchResults).values({
-                  sessionId,
-                  referenceImageId: body.referenceId,
-                  platform: 'xiaohongshu',
-                  sourceUrl: n.sourceUrl || null,
-                  imageUrl: localImageUrl,
-                  allImages: n.images,
-                  aiTags: aiTags.length ? aiTags : null,
-                  imageHash: imageHash || null,
-                  similarity,
-                  title: n.title || kw,
-                  author: n.author || null,
-                  tags: n.xhsTags || [],
-                  isNew: isNew ? 1 : 0,
-                  tier: 'tier1',
-                });
-                totalResults++;
-                if (isNew) newResults++;
-              };
-              // 并发批处理（6 张同时）
-              for (let i = 0; i < notes.length; i += CONCURRENCY) {
-                if (isAborted() || totalResults >= targetResults) break;
-                await Promise.all(notes.slice(i, i + CONCURRENCY).map(processXhs));
-                await db.update(schema.searchSessions).set({ resultCount: totalResults, newCount: newResults, searchTags: buildTags({ total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString() }) }).where(eq(schema.searchSessions.id, sessionId));
-                console.log(`[search] 进度: ${progressProcessed}/${progressTotal} 已处理，保留 ${kept} 张（非绘画 ${skipNotArt}，低质 ${skipLowQ}，重复 ${skipDup}）`);
-              }
-              console.log(`[search] 小红书 "${kw}" 筛选完成: 保留 ${kept}，非绘画 ${skipNotArt}，低质 ${skipLowQ}，重复 ${skipDup}`);
-            }
-          }
-        } else if (platform === 'weibo') {
-          const tax = isAiConfigured() ? await loadTaxonomy() : null;
-          for (const kw of searchKeywords.length ? searchKeywords : ['插画']) {
-            if (isAborted()) { console.log(`[search] session ${sessionId} 已终止`); break; }
-            const imgs = await searchWeiboByKeyword(kw, 100);
-            console.log(`[search] 微博 "${kw}": ${imgs.length} 张，开始 AI 筛选（增量写入）...`);
-            progressTotal += imgs.length;
-            await db.update(schema.searchSessions).set({ searchTags: buildTags({ total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString() }) }).where(eq(schema.searchSessions.id, sessionId));
-            let kept = 0, skipNotArt = 0, skipDup = 0, skipLowQ = 0;
-            const seenNoteIds = new Set<string>();
-            // 并发处理（6 张同时调 AI，6 倍速）
-            const processWeibo = async (im: any) => {
-              if (isAborted() || totalResults >= targetResults) return;
-              if (im.noteId && seenNoteIds.has(im.noteId)) return;
-              if (im.noteId) seenNoteIds.add(im.noteId);
-              // sourceUrl 去重：同帖只处理一次
-              const wbSrc = im.sourceUrl || (im.noteId ? `https://m.weibo.cn/status/${im.noteId}` : im.url);
-              if (seenSourceUrls.has(wbSrc)) { skipDup++; return; }
-              seenSourceUrls.add(wbSrc);
-              const myIdx = ++progressProcessed; // 捕获本任务的序号（并发时不能直接用共享变量做文件名）
-              let isArtwork = false;
-              let quality = 0;
-              let skipped = false;
-              let aiTags: any[] = [];
-              let imageHash: string | null = null;
-              let buf: Buffer | null = null;
-              if (im.title && NON_ART_TEXT.some(kw => im.title!.includes(kw))) { skipNotArt++; return; }
-              try {
-                const downloaded = await downloadImage(im.url);
-                buf = downloaded.buf;
-                const type = downloaded.type;
-                try { imageHash = await aHash(buf); } catch {}
-                if (imageHash) {
-                  if ([...libHashSet].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipDup++; return; }
-                  if ([...sessionHashes].some(h => hamming(imageHash!, h) <= DEDUP_THRESHOLD)) { skipDup++; return; }
-                  sessionHashes.add(imageHash);
-                }
-                if (isAiConfigured() && tax) {
-                  const b64 = buf.toString('base64');
-                  // 两步AI：①短prompt质检(1秒) → ②通过才长prompt打标(3-5秒)
-                  // 非绘画帖只花1秒排除，不再浪费3-5秒长prompt
-                  const gate = await gateArtwork(b64, type);
-                  isArtwork = gate.isArtwork;
-                  quality = gate.quality;
-                  if (!isArtwork || quality < MIN_QUALITY) { if (!isArtwork) skipNotArt++; else skipLowQ++; return; }
-                  // 通过质检的才打标（长prompt，用于标签过滤）
-                  const gemini = await callGemini(b64, type, tax.prompt);
-                  const gParsed = extractJson(gemini);
-                  const gIds = normalizeOutput(gParsed, tax.labelMap);
-                  const allIds = new Set([...gIds]);
-                  const tagRows = allIds.size ? await db.select().from(schema.tags).where(inArray(schema.tags.id, [...allIds])) : [];
-                  aiTags = tagRows.map(t => ({ tagId: t.id, label: t.label, dimensionId: t.dimensionId }));
-                } else {
-                  skipped = true;
-                }
-              } catch (e: any) {
-                console.error(`[search] 微博图处理失败 "${im.title?.slice(0, 20)}": ${e.message}`);
-              }
-              if (!skipped) {
-                if (!isArtwork) { skipNotArt++; return; }
-                if (quality < MIN_QUALITY) { skipLowQ++; return; }
-                if (filterTags.length && !checkTagFilter(aiTags)) { skipLowQ++; return; }
-              }
-              let similarity: number | null = null;
-              if (useClip && buf) {
-                try { similarity = cosine(refEmbedding!, await embedImage(buf)); }
-                catch { similarity = null; }
-                if (!skipped && similarity !== null && similarity < SIM_FLOOR) { skipLowQ++; return; }
-              }
-              kept++;
-              let localImageUrl = im.url;
-              if (buf) {
-                try {
-                  const uploadsDir = join(process.cwd(), 'uploads');
-                  await mkdir(uploadsDir, { recursive: true });
-                  const filename = `search-${sessionId}-${myIdx}.jpg`;
-                  await writeFile(join(uploadsDir, filename), buf);
-                  localImageUrl = `/uploads/${filename}`;
-                } catch (e: any) { console.error(`[search] 微博图片保存失败: ${e.message}`); }
-              }
-              const sourceUrl = im.sourceUrl || (im.noteId ? `https://m.weibo.cn/status/${im.noteId}` : im.url);
-              const isNew = !prevUrls.has(sourceUrl) && !(imageHash && prevHashes.has(imageHash));
-              await db.insert(schema.searchResults).values({
-                sessionId,
-                referenceImageId: body.referenceId,
-                platform: 'weibo',
-                sourceUrl,
-                imageUrl: localImageUrl,
-                allImages: [im.url],
-                imageHash: imageHash || null,
-                aiTags: aiTags.length ? aiTags : null,
-                similarity,
-                quality: skipped ? null : quality,
-                title: im.title || `微博·${kw}`,
-                author: null,
-                tags: [kw],
-                isNew: isNew ? 1 : 0,
-                tier: 'tier1',
-              });
-              totalResults++;
-              if (isNew) newResults++;
-            };
-            // 并发批处理（6 张同时）
-            for (let i = 0; i < imgs.length; i += CONCURRENCY) {
-              if (isAborted() || totalResults >= targetResults) break;
-              await Promise.all(imgs.slice(i, i + CONCURRENCY).map(processWeibo));
-              await db.update(schema.searchSessions).set({ resultCount: totalResults, newCount: newResults, searchTags: buildTags({ total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString() }) }).where(eq(schema.searchSessions.id, sessionId));
-              console.log(`[search] 微博进度: ${progressProcessed}/${progressTotal} 已处理，保留 ${kept} 张（非绘画 ${skipNotArt}，低质 ${skipLowQ}，重复 ${skipDup}）`);
-            }
-            console.log(`[search] 微博 "${kw}" 筛选完成: 保留 ${kept}，非绘画 ${skipNotArt}，低质 ${skipLowQ}，重复 ${skipDup}`);
-          }
+      // ── A. 召回各关键词 → 按 authorId 聚合（跨关键词去重，同作者累加命中次数）──
+      // fromCommission：该作者是否由约稿词召回（用于排序加权——约稿词命中的画师 hitCount 常为 1，
+      // 不加权会被画风高频作者挤出 Top ARTIST_CAP，广撒网就白撒了）。
+      type Agg = { authorId: string; nickname: string; hitCount: number; kw: string; fromCommission: boolean };
+      const authorMap = new Map<string, Agg>();
+      let dropNoId = 0, dropText = 0;
+      // 召回阶段进度：搜完一个关键词写一次（这是最慢的阶段，广撒网有 10 个词，2-3 分钟，不能让前端干等）
+      const kwTotal = recallKws.length;
+      let kwDone = 0;
+      await db.update(schema.searchSessions).set({ searchTags: buildTags({ stage: 'recall', kwDone, kwTotal, authorsFound: 0, startTime: new Date(progressStart).toISOString() }) }).where(eq(schema.searchSessions.id, sessionId));
+      for (const { kw, commission } of recallKws) {
+        if (isAborted()) break;
+        const notes = await searchXhsByKeyword(kw, XHS_RECALL, xhsCookie);
+        console.log(`[search] 小红书 "${kw}"${commission ? '(约稿词)' : ''}: ${notes.length} 帖，聚合作者中...`);
+        for (const n of notes) {
+          if (!n.authorId) { dropNoId++; continue; }
+          if (seenAuthorIds.has(n.authorId)) continue; // 继续搜索：已处理过的作者跳过
+          const g = authorMap.get(n.authorId);
+          if (g) { g.hitCount++; if (commission) g.fromCommission = true; continue; }
+          // 文字预筛：昵称/标题明显是路人号的，聚合阶段就不收（省一次主页反查）
+          const txt = (n.author || '') + ' ' + (n.title || '');
+          if (NON_ART_TEXT.some(w => txt.includes(w))) { dropText++; continue; }
+          authorMap.set(n.authorId, { authorId: n.authorId, nickname: n.author || '', hitCount: 1, kw, fromCommission: commission });
         }
-      } catch (e: any) {
-        console.error(`[search] ${platform} 失败: ${e.message}`);
+        kwDone++;
+        await db.update(schema.searchSessions).set({ searchTags: buildTags({ stage: 'recall', kwDone, kwTotal, authorsFound: authorMap.size, startTime: new Date(progressStart).toISOString() }) }).where(eq(schema.searchSessions.id, sessionId));
       }
+
+      // ── C. 排序取 Top ARTIST_CAP：约稿来源 +1 加权保底（防被画风高频作者挤掉），再按命中次数降序 ──
+      const scoreOf = (a: Agg) => a.hitCount + (a.fromCommission ? 1 : 0);
+      const allAuthors = [...authorMap.values()].sort((a, b) => scoreOf(b) - scoreOf(a));
+      const authors = allAuthors.slice(0, ARTIST_CAP);
+      const droppedByCap = allAuthors.length - authors.length;
+      const commissionCount = authors.filter(a => a.fromCommission).length;
+      progressTotal += authors.length;
+      console.log(`[search] 聚合得 ${allAuthors.length} 个作者（无id丢 ${dropNoId}，路人词丢 ${dropText}），反查前 ${authors.length} 个（其中约稿词 ${commissionCount}）${droppedByCap ? `（超上限丢 ${droppedByCap}）` : ''}`);
+      await db.update(schema.searchSessions).set({ searchTags: buildTags({ stage: 'judge', total: progressTotal, processed: 0, startTime: new Date(progressStart).toISOString() }) }).where(eq(schema.searchSessions.id, sessionId));
+
+      let fileSeq = totalResults; // 作品图文件名序号（continue 时从已有数接续，避免覆盖）
+      let dropNotArtist = 0, profileFail = 0, skipNoCover = 0;
+
+      // ── D. 并发(3)反查每个作者主页，判是不是画师号 ──
+      const processAuthor = async (a: Agg) => {
+        if (isAborted()) return;
+        progressProcessed++;
+        const url = buildProfileUrl(a.authorId);
+        let profile: { nickname: string; items: any[] };
+        try {
+          profile = await fetchProfileNotes(url);
+        } catch (e: any) { profileFail++; console.error(`[search] 主页反查失败 ${a.nickname}: ${e.message}`); return; }
+        const items = (profile.items || []).filter(it => it.url);
+        if (!items.length) { skipNoCover++; return; }
+
+        // 下载前 N 张封面 → 判是不是画师号
+        const covers: { b64: string; mime: string }[] = [];
+        for (const it of items.slice(0, COVERS_TO_JUDGE)) {
+          try { covers.push({ b64: (await downloadImage(it.url)).buf.toString('base64'), mime: 'image/jpeg' }); }
+          catch {}
+        }
+        if (!covers.length) { skipNoCover++; return; }
+        const judge = await judgeArtistAccount(covers);
+        if (!judge.isArtist) { dropNotArtist++; console.log(`[search] 丢弃路人 ${profile.nickname || a.nickname}: ${judge.reason}`); return; }
+
+        // 是画师：存主页前 N 张作品作为代表作（每张一行 search_result）
+        let savedForThis = 0;
+        for (const it of items.slice(0, WORKS_PER_ARTIST)) {
+          if (isAborted()) break;
+          try {
+            const { buf } = await downloadImage(it.url);
+            let imageHash: string | null = null;
+            try { imageHash = await aHash(buf); } catch {}
+            if (imageHash) {
+              const nib = hexToNibbles(imageHash);
+              if (isDup(nib)) continue; // 该作品已在库/session
+              sessionNibs.push(nib);
+            }
+            const uploadsDir = join(process.cwd(), 'uploads');
+            await mkdir(uploadsDir, { recursive: true });
+            const filename = `search-${sessionId}-${++fileSeq}.jpg`;
+            await writeFile(join(uploadsDir, filename), buf);
+            const isNew = !(imageHash && prevHashes.has(imageHash));
+            await db.insert(schema.searchResults).values({
+              sessionId,
+              referenceImageId: body.referenceId,
+              platform: 'xiaohongshu',
+              sourceUrl: it.url,
+              imageUrl: `/uploads/${filename}`,
+              allImages: items.map(x => x.url),
+              aiTags: [{ isArtist: true, artRatio: judge.artRatio, style: judge.style, reason: judge.reason }] as any,
+              imageHash: imageHash || null,
+              similarity: null,
+              quality: null,
+              title: it.title || profile.nickname || a.nickname,
+              author: profile.nickname || a.nickname || null,
+              authorUrl: url,
+              tags: [a.kw],
+              isNew: isNew ? 1 : 0,
+              tier: 'tier1',
+            });
+            totalResults++; savedForThis++;
+            if (isNew) newResults++;
+          } catch (e: any) { console.error(`[search] 存作品失败: ${e.message}`); }
+        }
+        if (savedForThis) keptArtists++;
+        // 轻微限速，降低主页密集访问被限流的概率
+        await new Promise(r => setTimeout(r, 200 + Math.floor(progressProcessed % 5) * 80));
+      };
+
+      // 并发批处理（3 个作者主页同时）
+      for (let i = 0; i < authors.length; i += ARTIST_CONCURRENCY) {
+        if (isAborted()) break;
+        await Promise.all(authors.slice(i, i + ARTIST_CONCURRENCY).map(processAuthor));
+        await db.update(schema.searchSessions).set({ resultCount: totalResults, newCount: newResults, searchTags: buildTags({ stage: 'judge', total: progressTotal, processed: progressProcessed, artists: keptArtists, startTime: new Date(progressStart).toISOString() }) }).where(eq(schema.searchSessions.id, sessionId));
+        console.log(`[search] 进度: ${progressProcessed}/${progressTotal} 作者，画师 ${keptArtists}（路人 ${dropNotArtist}，主页失败 ${profileFail}，无封面 ${skipNoCover}）`);
+      }
+      console.log(`[search] 小红书完成: 画师 ${keptArtists} 人 / ${totalResults} 作品（路人 ${dropNotArtist}，主页失败 ${profileFail}，无封面 ${skipNoCover}）`);
     }
 
-    // 最终更新：包含进度信息（前端算百分比/ETA用）
+    // 最终更新：包含进度信息（前端算百分比/ETA用）+ 画师数写入 progress 供前端展示
     const elapsed = Date.now() - progressStart;
     await db.update(schema.searchSessions).set({
       status: 'ok', resultCount: totalResults, newCount: newResults,
-      searchTags: buildTags({ total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString(), elapsedMs: elapsed }),
+      searchTags: buildTags({ total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString(), elapsedMs: elapsed, artists: keptArtists }),
     }).where(eq(schema.searchSessions.id, sessionId));
-    await logOperation({ type: 'search_start', targetType: 'reference', targetId: body.referenceId, summary: `寻源搜索 #${sessionId}：${totalResults} 结果（${newResults} 新增）` });
-    return { sessionId, resultCount: totalResults, newCount: newResults };
+    await logOperation({ type: 'search_start', targetType: 'reference', targetId: body.referenceId, summary: `寻源搜索 #${sessionId}：${keptArtists} 位画师 / ${totalResults} 作品（${newResults} 新增）` });
+    return { sessionId, resultCount: totalResults, newCount: newResults, artists: keptArtists };
   }
 
   // 重命名 session
@@ -487,6 +389,36 @@ export class SearchService {
       rows.sort((a: any, b: any) => (b.isNew - a.isNew) || (b.id - a.id));
     }
     return rows;
+  }
+
+  // 结果按画师聚合：把一个 session 的结果按 author 归组，产出「候选画师清单」——寻源的真实目标。
+  // 每个画师一组：作者名、主页链接、代表作、画风关键词、AI 判定的 artRatio。仿 discover.resultsByArtist。
+  async resultsByArtist(sessionId: number, tier?: string) {
+    const rows = await this.listResults(sessionId, tier);
+    const groups = new Map<string, {
+      author: string | null; authorUrl: string | null; platform: string | null;
+      count: number; artRatio: number | null; style: string; styleTags: string[]; results: any[];
+    }>();
+    for (const r of rows) {
+      const key = r.authorUrl || r.author?.trim() || '__unknown__';
+      let g = groups.get(key);
+      if (!g) { g = { author: r.author?.trim() || null, authorUrl: r.authorUrl ?? null, platform: r.platform, count: 0, artRatio: null, style: '', styleTags: [], results: [] }; groups.set(key, g); }
+      g.count++;
+      g.results.push(r);
+      if (!g.authorUrl && r.authorUrl) g.authorUrl = r.authorUrl;
+      // 从 aiTags 里取 AI 判定的画师作品占比 + 主页画风概括（新流程存 [{isArtist,artRatio,style,reason}]）
+      const tag0 = (r.aiTags as any[])?.[0];
+      const ar = tag0?.artRatio;
+      if (typeof ar === 'number' && (g.artRatio == null || ar > g.artRatio)) g.artRatio = ar;
+      if (!g.style && tag0?.style) g.style = String(tag0.style);
+      for (const t of (r.tags as string[] | null) || []) if (t && !g.styleTags.includes(t)) g.styleTags.push(t);
+    }
+    // 有署名的按代表作数降序在前，未知作者组固定垫底
+    return [...groups.values()].sort((a, b) => {
+      if (!a.author && b.author) return 1;
+      if (a.author && !b.author) return -1;
+      return b.count - a.count;
+    });
   }
 
   // 复核：tier1 → tier2

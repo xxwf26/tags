@@ -53,6 +53,12 @@ export class SearchController {
     return this.searchService.listResults(Number(sessionId), tier);
   }
 
+  // 结果按画师聚合：GET /api/search/results-by-artist?sessionId=X&tier=tier1
+  @Get('results-by-artist')
+  resultsByArtist(@Query('sessionId') sessionId: string, @Query('tier') tier?: string) {
+    return this.searchService.resultsByArtist(Number(sessionId), tier);
+  }
+
   // 复核进二级库
   @Post('results/:id/review')
   review(@Param('id', ParseIntPipe) id: number) { return this.searchService.review(id); }

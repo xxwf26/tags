@@ -119,6 +119,26 @@ export async function callGemini(b64: string, mime: string, prompt: string): Pro
   return parts.filter((p: any) => p.thought !== true).map((p: any) => p.text || '').join('').trim() || null;
 }
 
+// 多图一次调用：把多张图放进同一个 user turn，适合"给整组图做一个整体判断"（如判画师主页画风构成）
+export async function callGeminiMulti(imgs: { b64: string; mime: string }[], prompt: string): Promise<string | null> {
+  const body = {
+    systemInstruction: { parts: [{ text: prompt }] },
+    contents: [{ role: 'user', parts: [
+      { text: '下面是同一个账号主页的多张笔记封面，请整体判断，只输出 JSON。' },
+      ...imgs.map(im => ({ inline_data: { mime_type: im.mime, data: im.b64 } })),
+    ] }],
+    generationConfig: { temperature: 0, maxOutputTokens: 1024, responseMimeType: 'application/json' },
+  };
+  const res = await fetch(`${AI_BASE}/gemini/v1beta/models/${GEMINI_MODEL}:generateContent`, {
+    method: 'POST', headers: { Authorization: `Bearer ${AI_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body), signal: AbortSignal.timeout(120000),
+  });
+  const json: any = await res.json();
+  if (json.error) throw new Error(`gemini: ${json.error.message}`);
+  const parts = json.candidates?.[0]?.content?.parts || [];
+  return parts.filter((p: any) => p.thought !== true).map((p: any) => p.text || '').join('').trim() || null;
+}
+
 async function callDoubao(b64: string, mime: string, prompt: string): Promise<string | null> {
   const body = {
     model: DOUBAO_MODEL,
@@ -197,5 +217,72 @@ export async function gateArtwork(b64: string, mime: string): Promise<GateResult
   } catch (e) {
     // 运行时偶发故障（超时/限流）：中性放行，不因抖动漏掉真作品，但标 skipped 供上层区分
     return { isArtwork: true, quality: 5, category: 'unknown', reason: '', error: (e as Error).message, skipped: true };
+  }
+}
+
+// 质检 + 打标一次调用：tax.prompt 本就同时输出 is_artwork/quality/各维度标签，
+// 一次 Gemini 拿全三者，避免「gate 短 prompt + tag 长 prompt」两次串行调用（对 vision flash，
+// 延迟主要来自图片编码+输出生成，长 prompt 多几十个词几乎不增延迟，故合并 = 砍掉一半调用）。
+// AI 故障/无 key：中性放行（isArtwork=true, quality=5, 无标签），标 skipped 供上层区分。
+export type GateTagResult = { isArtwork: boolean; quality: number; tagIds: Set<number>; error: string | null; skipped: boolean };
+
+export async function gateAndTag(b64: string, mime: string, tax: Taxonomy): Promise<GateTagResult> {
+  if (!isAiConfigured()) {
+    return { isArtwork: true, quality: 5, tagIds: new Set(), error: 'AI_API_KEY 未配置', skipped: true };
+  }
+  try {
+    const raw = await callGemini(b64, mime, tax.prompt);
+    const parsed = extractJson(raw);
+    if (!parsed) throw new Error('打标输出无法解析');
+    const quality = Math.max(0, Math.min(10, Number(parsed.quality) || 0));
+    return {
+      isArtwork: parsed.is_artwork === true,
+      quality,
+      tagIds: normalizeOutput(parsed, tax.labelMap),
+      error: null,
+      skipped: false,
+    };
+  } catch (e) {
+    return { isArtwork: true, quality: 5, tagIds: new Set(), error: (e as Error).message, skipped: true };
+  }
+}
+
+// 判画师号：给一个账号主页的多张笔记封面，整体判断这是不是「画师/插画创作者」账号。
+// 寻源新逻辑的核心——过滤标准是「作者是不是画师」而非「单张作品质量/画风」。
+// 主页以原创绘画为主 = 画师（留）；穿搭/美食/日常/自拍/摄影/搬运转发为主 = 路人（丢）。
+const ARTIST_JUDGE_PROMPT = `你是画师星探。给你的是某个社交账号主页最近若干篇笔记的封面图，请整体判断这个账号是不是「画师/插画创作者」账号。
+只输出 JSON，格式：{"is_artist":true/false,"art_ratio":0.0~1.0,"style":"...","reason":"..."}
+判定规则：
+- is_artist=true：主页以本人原创的绘画/插画/漫画/角色设计/同人图/概念设计为主（占比过半即可，允许夹杂线稿、过程图、少量杂图）。
+- is_artist=false：主页以下列内容为主——穿搭/美食/旅游/健身/自拍/日常vlog/摄影写真/cosplay实拍/手办周边/影视综艺/搬运转发他人作品/纯文字/商品带货/教程课程。
+- art_ratio：这些封面里「原创绘画作品」所占的大致比例（0~1）。
+- style：用一句话概括这个画师的大致画风（如"日系厚涂人物"、"古风水墨"、"欧美卡通"、"Q版头像"），不限词表，自由概括；非画师则留空字符串。
+- reason：一句话中文说明依据（如"主页多为原创古风人物插画"或"主页以穿搭自拍为主，非画师"）。
+判断要点：看整体构成，不是看单张好坏。宁可对"疑似画师但夹杂杂图"判 true，也就是占比过半即算画师。
+不要输出任何解释性文字、不要用 markdown 代码块包裹。`;
+
+export type ArtistJudgeResult = { isArtist: boolean; artRatio: number; style: string; reason: string; error: string | null; skipped: boolean };
+
+export async function judgeArtistAccount(covers: { b64: string; mime: string }[]): Promise<ArtistJudgeResult> {
+  // 无 key / 无封面 = 结构性缺配：中性放行标 skipped，宁可留给人工筛也不漏画师。
+  if (!isAiConfigured() || !covers.length) {
+    return { isArtist: true, artRatio: 0.5, style: '', reason: '', error: isAiConfigured() ? '无封面' : 'AI_API_KEY 未配置', skipped: true };
+  }
+  try {
+    const raw = await callGeminiMulti(covers, ARTIST_JUDGE_PROMPT);
+    const parsed = extractJson(raw);
+    if (!parsed) throw new Error('画师判定输出无法解析');
+    const artRatio = Math.max(0, Math.min(1, Number(parsed.art_ratio) || 0));
+    return {
+      isArtist: parsed.is_artist === true,
+      artRatio,
+      style: String(parsed.style || ''),
+      reason: String(parsed.reason || ''),
+      error: null,
+      skipped: false,
+    };
+  } catch (e) {
+    // 运行时偶发故障（超时/限流）：中性放行不漏画师，标 skipped 供上层区分
+    return { isArtist: true, artRatio: 0.5, style: '', reason: '', error: (e as Error).message, skipped: true };
   }
 }
