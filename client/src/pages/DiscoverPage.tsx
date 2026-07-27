@@ -193,6 +193,16 @@ export function DiscoverPage() {
     }
   }, [mhsMissing, mhsFillMsg, results]);
 
+  // 自动补全：查看有缺名米画师结果的 session 时，后台自动抓画师名（每个 session 只自动触发一次，避免循环）
+  const autoFilledRefs = useRef<Set<number>>(new Set());
+  const fillAllRef = useRef(fillAllMhsAuthors);
+  fillAllRef.current = fillAllMhsAuthors;
+  useEffect(() => {
+    if (!activeId || !hasResults || mhsFillMsg) return;
+    if (autoFilledRefs.current.has(activeId)) return;
+    if (mhsMissing > 0) { autoFilledRefs.current.add(activeId); fillAllRef.current(); }
+  }, [activeId, hasResults, mhsMissing, mhsFillMsg]);
+
   return (
     <div className="max-w-[1600px] mx-auto px-3 md:px-6 py-3">
       {/* 配置区 */}
