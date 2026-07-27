@@ -155,11 +155,17 @@ export type XhsSearchResult = {
   noteId: string;
   title: string;
   author: string;
+  authorId: string;   // 作者 user_id，用于拼画师主页链接反查是否画师号
   sourceUrl: string;
   type: string;
   images: string[];   // 该帖所有图片URL
   xhsTags: string[];  // 帖子自带标签（从 corner_tag_info 提取）
 };
+
+// 用 user_id 拼画师主页链接。裸URL即可 SSR 拿到作品列表（已验证：无需 xsec_token / 无需登录）
+export function buildProfileUrl(authorId: string): string {
+  return `https://www.xiaohongshu.com/user/profile/${authorId}`;
+}
 
 // 按关键词搜索小红书笔记（需 cookie，拦截 v2 search API，翻页+限速）
 // 过滤视频帖 + 广告帖，提取每帖全部图片

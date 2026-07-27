@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { SearchResult } from '../api';
-import { useReferences, useUploadReference, useUpdateReferenceTags, useStartSearch, useSearchSessions, useSearchResults, useReviewSearchResult, usePromoteSearchResult, useRejectSearchResult, useDeleteReference, useTags } from '../hooks';
+import type { SearchResult, SearchArtistGroup } from '../api';
+import { useReferences, useUploadReference, useUpdateReferenceTags, useStartSearch, useSearchSessions, useSearchResults, useSearchResultsByArtist, useReviewSearchResult, usePromoteSearchResult, useRejectSearchResult, useDeleteReference, useTags } from '../hooks';
 import { tagsByTopDim, proxyImg } from '../api';
 const BASE = '/api';
 const SEARCH_REF_KEY = 'search:ref';
@@ -37,7 +37,8 @@ export function SearchPage() {
     fetch(BASE + '/settings/xhs-cookie').then(res => res.json()).then(setCookieStatus);
   }, [cookieSaved]);
   const [fuzzyRatio, setFuzzyRatio] = useState(1);
-  const [platforms, setPlatforms] = useState<Set<string>>(new Set(['xiaohongshu', 'weibo']));
+  const [platforms, setPlatforms] = useState<Set<string>>(new Set(['xiaohongshu']));
+  const [wideNet, setWideNet] = useState(true); // 约稿广撒网：并行搜约稿身份词最大范围捞画师
   const [activeSession, setActiveSession] = useState<number | null>(() => {
     const v = localStorage.getItem(SEARCH_SESSION_KEY); return v ? Number(v) : null;
   });
@@ -59,9 +60,24 @@ export function SearchPage() {
   // 进度/运行态从轮询到的 session 派生（取代旧的本地 searching/progress state + 手写 setInterval）
   const activeData = sessions.find(s => s.id === activeSession);
   const running = activeData?.status === 'running';
-  const progress: { total: number; processed: number; startTime: string } | null = (activeData?.searchTags as any)?.progress ?? null;
+  const progress: { stage?: string; total?: number; processed?: number; kwDone?: number; kwTotal?: number; authorsFound?: number; artists?: number; startTime: string } | null = (activeData?.searchTags as any)?.progress ?? null;
   const busy = running || startSearchM.isPending;
+  // 分阶段进度文案：召回(搜帖子)→甄别(判画师)。召回是最慢阶段，必须给反馈不能干等。
+  const progressLabel = (() => {
+    if (!busy) return '🔍 按标签搜索';
+    if (!progress) return '正在启动…';
+    if (progress.stage === 'recall') {
+      const done = progress.kwDone ?? 0, total = progress.kwTotal ?? 0;
+      return `搜索帖子 ${done}/${total} 组关键词${progress.authorsFound ? `（已聚合 ${progress.authorsFound} 位作者）` : ''}`;
+    }
+    if (progress.stage === 'judge' && (progress.total ?? 0) > 0) {
+      const pct = Math.round((progress.processed ?? 0) / progress.total! * 100);
+      return `甄别画师 ${progress.processed ?? 0}/${progress.total}（${pct}%）· 已找到 ${progress.artists ?? 0} 位`;
+    }
+    return '搜索中…';
+  })();
   const resultsQ = useSearchResults(activeSession ?? 0, undefined, running);
+  const artistsQ = useSearchResultsByArtist(activeSession ?? 0, undefined, running);
   const reviewM = useReviewSearchResult();
   const promoteM = usePromoteSearchResult();
   const rejectM = useRejectSearchResult();
@@ -152,14 +168,16 @@ export function SearchPage() {
   };
   const selectedIds = Object.keys(tagModes).map(Number);
   const togglePlatform = (k: string) => setPlatforms(s => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); if (!n.size) n.add(k); return n; });
-  const PLATFORM_OPTS = [{ key: 'xiaohongshu', label: '小红书' }, { key: 'weibo', label: '微博' }];
+  const PLATFORM_OPTS = [{ key: 'xiaohongshu', label: '小红书' }];
   const saveTags = () => { if (selectedRef) updateTags.mutate({ id: selectedRef, manualTags: selectedIds.map(id => { const t = (ref?.aiTags ?? []).find(a => a.tagId === id); return { tagId: id, label: t?.label ?? '', dimensionId: t?.dimensionId ?? null }; }) }); };
 
   const doSearch = async () => {
     if (!selectedRef) return;
-    // 从 tag tree 查 label（不依赖 aiTags，避免乱码/空）
+    // 从 tag tree 查 label（不依赖 aiTags，避免乱码/空）；同时记录哪些顶层维度是 genre 画风
     const allTags: { id: number; label: string; dimensionId: number }[] = [];
+    const genreDimIds = new Set<number>();
     for (const top of (tagsQ.data ?? [])) {
+      if (top.code === 'genre') { genreDimIds.add(top.id); for (const sub of top.children) genreDimIds.add(sub.id); }
       for (const t of top.tags) allTags.push({ id: t.id, label: t.label, dimensionId: top.id });
       for (const sub of top.children) {
         for (const t of sub.tags) allTags.push({ id: t.id, label: t.label, dimensionId: sub.id });
@@ -169,9 +187,15 @@ export function SearchPage() {
       const t = allTags.find(a => a.id === id);
       return { tagId: id, label: t?.label ?? '', dimensionId: t?.dimensionId ?? null, mode: tagModes[id] };
     });
+    // 空标签兜底：没有画风标签且没开广撒网 → 搜不出东西，提示而非静默搜"插画"
+    const hasGenre = tags.some(t => t.dimensionId != null && genreDimIds.has(t.dimensionId));
+    if (!hasGenre && !wideNet) {
+      alert('未选择画风标签。请手动选画风标签，或开启「约稿广撒网」用约稿词捞画师。');
+      return;
+    }
     // 只记录 activeSession，进度/结果轮询由 useSearchSessions / useSearchResults 的 refetchInterval 接管
     // （切页/刷新也能接续，不再依赖组件内的 setInterval）
-    startSearchM.mutate({ referenceId: selectedRef, tags, platforms: [...platforms], fuzzyRatio }, {
+    startSearchM.mutate({ referenceId: selectedRef, tags, platforms: [...platforms], fuzzyRatio, wideNet }, {
       onSuccess: (r) => { setActiveSession(r.sessionId); refetchSessions(); },
     });
   };
@@ -185,6 +209,7 @@ export function SearchPage() {
   };
 
   const results = resultsQ.data ?? [];
+  const artistGroups: SearchArtistGroup[] = artistsQ.data ?? [];
 
   const saveCookie = () => {
     if (!xhsCookie.trim()) return;
@@ -292,40 +317,43 @@ export function SearchPage() {
                     className={`px-2.5 py-0.5 rounded-full cursor-pointer border ${on ? 'bg-xhs text-white border-xhs' : 'bg-white text-stone-500 border-stone-200'}`}>{p.label}</span>;
                 })}
               </div>
+              {/* 约稿广撒网：并行搜"约稿/接稿/原画师…"身份词，最大范围捞画师（甲方/路人靠判画师号剔除） */}
+              <div className="flex items-center gap-2 mt-2 text-[11px] text-stone-500">
+                <span onClick={() => setWideNet(v => !v)}
+                  className={`px-2.5 py-0.5 rounded-full cursor-pointer border ${wideNet ? 'bg-xhs text-white border-xhs' : 'bg-white text-stone-500 border-stone-200'}`}>🎯 约稿广撒网 {wideNet ? '开' : '关'}</span>
+                <span className="text-stone-400">额外搜约稿/接稿/原画师等身份词，捞出更多画师</span>
+              </div>
               <div className="flex gap-2 mt-2 flex-wrap items-center">
                 <button onClick={doSearch} disabled={busy}
                   className="text-[12px] bg-xhs text-white rounded-full px-4 py-1.5 font-medium disabled:opacity-50">
-                  {busy ? (progress ? Math.round(progress.processed / progress.total * 100) + '%（' + progress.processed + '/' + progress.total + '）' : '正在搜索小红书帖子…') : '🔍 按标签搜索'}
+                  {progressLabel}
                 </button>
-                {running && progress && progress.total > 0 && (() => {
-                  const pct = Math.round(progress.processed / progress.total * 100);
+                {running && progress?.stage === 'judge' && (progress.total ?? 0) > 0 && (() => {
+                  const total = progress.total!, processed = progress.processed ?? 0;
                   const now = Date.now();
                   const prev = progressRef.current;
                   let etaStr = '';
                   // 只在 processed 变化时更新 ref（否则时间戳刷新但进度没动，速度算出来是0）
-                  if (!prev || prev.processed !== progress.processed) {
-                    if (prev && prev.processed < progress.processed && now > prev.ts) {
-                      const recentSpeed = (progress.processed - prev.processed) / ((now - prev.ts) / 1000);
+                  if (!prev || prev.processed !== processed) {
+                    if (prev && prev.processed < processed && now > prev.ts) {
+                      const recentSpeed = (processed - prev.processed) / ((now - prev.ts) / 1000);
                       if (recentSpeed > 0) {
-                        const remaining = Math.round((progress.total - progress.processed) / recentSpeed);
+                        const remaining = Math.round((total - processed) / recentSpeed);
                         etaStr = remaining > 60 ? `~${Math.ceil(remaining / 60)}分钟` : `~${remaining}秒`;
                       }
                     }
-                    progressRef.current = { processed: progress.processed, ts: now };
-                  } else if (prev) {
-                    // processed 没变，沿用上次算的 ETA（如果有）
-                    const recentSpeed = 0; // 无法算
+                    progressRef.current = { processed, ts: now };
                   }
-                  // 兜底：processed >= 5 但没有最近速度时，用总平均（至少有数字）
-                  if (!etaStr && progress.processed >= 5) {
+                  // 兜底：processed >= 3 但没有最近速度时，用总平均（至少有数字）
+                  if (!etaStr && processed >= 3) {
                     const elapsed = (now - new Date(progress.startTime).getTime()) / 1000;
-                    const avgSpeed = progress.processed / elapsed;
+                    const avgSpeed = processed / elapsed;
                     if (avgSpeed > 0) {
-                      const remaining = Math.round((progress.total - progress.processed) / avgSpeed);
+                      const remaining = Math.round((total - processed) / avgSpeed);
                       etaStr = remaining > 60 ? `~${Math.ceil(remaining / 60)}分钟` : `~${remaining}秒`;
                     }
                   }
-                  return <span className="text-[11px] text-stone-500">{pct}%（{progress.processed}/{progress.total}）{etaStr && `· 剩余 ${etaStr}`}</span>;
+                  return etaStr ? <span className="text-[11px] text-stone-500">剩余 {etaStr}</span> : null;
                 })()}
                 {running && activeSession && (
                   <button onClick={() => {
@@ -408,49 +436,43 @@ export function SearchPage() {
         </div>
       )}
 
-      {/* 搜索结果 */}
-      {activeSession && results.length > 0 && (
+      {/* 搜索结果：按画师聚合（寻源目标是找画师建联，不是攒作品） */}
+      {activeSession && artistGroups.length > 0 && (
         <div>
-          <div className="text-[13px] text-stone-500 mb-2 px-1">结果 {results.length} 帖（<span className="text-xhs">{results.filter(r => r.isNew).length} 新增</span>）</div>
-          <div className="masonry columns-2 md:columns-3 lg:columns-4 xl:columns-5 2xl:columns-6">
-            {results.map(r => {
-              const allImgs: string[] = (r as any).allImages || (r.imageUrl ? [r.imageUrl] : []);
-              return (
-                <div key={r.id} className="mb-2.5 break-inside-avoid bg-white rounded-xl overflow-hidden border border-stone-100 card-hover">
-                  <div className="relative cursor-pointer" onClick={() => setViewResult(r)}>
-                    <img src={proxyImg(r.imageUrl)} className="w-full object-cover" alt="" style={{ aspectRatio: '3/4' }} onError={e => ((e.target as HTMLImageElement).style.opacity = '0.3')} />
-                    {(r as any).similarity != null && <span className="absolute top-2 left-2 text-[10px] px-1.5 py-0.5 rounded bg-violet-600 text-white">似 {Math.round((r as any).similarity * 100)}%</span>}
-                    {r.isNew ? <span className="absolute top-2 left-2 text-[10px] px-1.5 py-0.5 rounded bg-xhs text-white" style={{ left: (r as any).similarity != null ? '3.5rem' : '0.5rem' }}>NEW</span> : null}
-                    {allImgs.length > 1 && <span className="absolute top-2 right-2 text-[10px] px-1.5 py-0.5 rounded bg-black/50 text-white">📊{allImgs.length}张</span>}
-                    <span className="absolute bottom-2 right-2 text-[10px] px-1.5 py-0.5 rounded bg-black/40 text-white">{r.platform}</span>
-                  </div>
-                  <div className="p-2">
-                    <div className="text-[11px] text-stone-600 truncate">{r.title || '未命名'}</div>
-                    {r.author && <div className="text-[10px] text-stone-400">作者：{r.author}</div>}
-                    {r.tags?.length > 0 && <div className="flex gap-1 flex-wrap mt-1">{r.tags.slice(0, 3).map((t: string, i: number) => <span key={i} className="text-[9px] text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded">{t}</span>)}</div>}
-                    <div className="flex items-center justify-between mt-1.5">
-                      <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${TIER_LABEL[r.tier]?.cls || ''}`}>{TIER_LABEL[r.tier]?.label || r.tier}</span>
-                      {r.tier === 'tier1' && (
-                        <div className="flex gap-1">
-                          <button onClick={() => reviewM.mutate(r.id)} className="text-[10px] text-sky-600 border border-sky-200 rounded-full px-2 py-0.5 hover:bg-sky-50">复核</button>
-                          <button onClick={() => rejectM.mutate(r.id)} className="text-[10px] text-stone-400 border border-stone-200 rounded-full px-2 py-0.5">丢弃</button>
-                        </div>
-                      )}
-                      {r.tier === 'tier2' && (
-                        <div className="flex gap-1">
-                          <button onClick={() => promoteM.mutate(r.id)} className="text-[10px] text-xhs border border-xhs/30 rounded-full px-2 py-0.5 hover:bg-xhs-soft">入库</button>
-                          <button onClick={() => rejectM.mutate(r.id)} className="text-[10px] text-stone-400 border border-stone-200 rounded-full px-2 py-0.5">丢弃</button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
+          <div className="text-[13px] text-stone-500 mb-2 px-1">找到 <span className="text-xhs font-medium">{artistGroups.length}</span> 位画师（共 {results.length} 张代表作）</div>
+          <div className="space-y-2.5">
+            {artistGroups.map((g, gi) => (
+              <div key={g.authorUrl || g.author || gi} className="bg-white rounded-xl border border-stone-100 p-3 card-hover">
+                <div className="flex items-center gap-2 flex-wrap mb-2">
+                  <span className="text-[13px] font-semibold text-stone-700">{g.author || '未知作者'}</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-xhs-soft text-xhs">{g.count} 张代表作</span>
+                  {g.artRatio != null && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-50 text-violet-600">画作占比 {Math.round(g.artRatio * 100)}%</span>}
+                  {g.style && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-600">画风：{g.style}</span>}
+                  {g.authorUrl && <a href={g.authorUrl} target="_blank" rel="noopener noreferrer" className="text-[11px] text-sky-600 hover:underline">主页 ↗</a>}
+                  {g.styleTags.length > 0 && <span className="text-[10px] text-stone-400">命中：{g.styleTags.slice(0, 6).join(' / ')}</span>}
+                  {/* 建联：把该画师所有代表作入库 → 自动建画师记录 + 存主页链接到 artists 表 */}
+                  {g.results.some(r => r.tier === 'tier1' || r.tier === 'tier2') && (
+                    <button
+                      onClick={() => g.results.filter(r => r.tier === 'tier1' || r.tier === 'tier2').forEach(r => { if (r.tier === 'tier1') reviewM.mutate(r.id); promoteM.mutate(r.id); })}
+                      className="ml-auto text-[11px] text-xhs border border-xhs/30 rounded-full px-2.5 py-0.5 hover:bg-xhs-soft">入库建联</button>
+                  )}
                 </div>
-              );
-            })}
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  {g.results.map(r => (
+                    <div key={r.id} className="relative shrink-0 cursor-pointer" onClick={() => setViewResult(r)}>
+                      <img src={proxyImg(r.imageUrl)} className="h-28 rounded-lg object-cover border border-stone-100" style={{ maxWidth: 160 }} alt="" onError={e => ((e.target as HTMLImageElement).style.opacity = '0.3')} />
+                      {r.tier === 'promoted' && <span className="absolute top-1 right-1 text-[10px] px-1 rounded bg-emerald-500 text-white">✓</span>}
+                      {r.tier === 'tier2' && <span className="absolute top-1 right-1 text-[9px] px-1 rounded bg-sky-500 text-white">复核</span>}
+                      {r.tier === 'rejected' && <span className="absolute top-1 right-1 text-[9px] px-1 rounded bg-stone-400 text-white">弃</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}
-      {activeSession && !results.length && <div className="text-center text-stone-400 py-12">该搜索无结果</div>}
+      {activeSession && !running && !artistGroups.length && <div className="text-center text-stone-400 py-12">该搜索未找到画师</div>}
       {!activeSession && selectedRef && sessions.length > 0 && <div className="text-center text-stone-400 py-8">选择上方搜索历史查看结果</div>}
       {/* 大图查看器（一帖多图翻页） */}
       {viewResult && (() => {

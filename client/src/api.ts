@@ -179,9 +179,14 @@ export type SearchSession = {
 };
 export type SearchResult = {
   id: number; sessionId: number; referenceImageId: number; platform: string;
-  sourceUrl: string | null; imageUrl: string | null; title: string | null; author: string | null;
+  sourceUrl: string | null; imageUrl: string | null; title: string | null; author: string | null; authorUrl: string | null;
   tags: string[]; aiTags: any; imageHash: string | null; isNew: number;
   tier: 'tier1' | 'tier2' | 'promoted' | 'rejected'; promotedArtworkId: number | null; createdAt: string;
+};
+// 寻源按画师聚合：一个作者一组（作者名+主页链接+代表作+画风词+AI判定的画师作品占比）
+export type SearchArtistGroup = {
+  author: string | null; authorUrl: string | null; platform: string | null;
+  count: number; artRatio: number | null; style?: string; styleTags: string[]; results: SearchResult[];
 };
 export async function uploadReference(file: File): Promise<ReferenceImage> {
   const fd = new FormData(); fd.append('file', file);
@@ -199,7 +204,7 @@ export async function updateReferenceTags(id: number, manualTags: any[]) {
   const r = await fetch(BASE + '/reference/' + id + '/tags', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ manualTags }) });
   if (!r.ok) throw new Error('update tags failed'); return r.json();
 }
-export async function startSearch(body: { referenceId: number; tags: any[]; platforms?: string[]; fuzzyRatio?: number; keywordMode?: string }) {
+export async function startSearch(body: { referenceId: number; tags: any[]; platforms?: string[]; fuzzyRatio?: number; keywordMode?: string; wideNet?: boolean }) {
   const r = await fetch(BASE + '/search/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   if (!r.ok) throw new Error('search failed'); return r.json();
 }
@@ -209,6 +214,10 @@ export async function fetchSearchSessions(referenceId: number): Promise<SearchSe
 export async function fetchSearchResults(sessionId: number, tier?: string): Promise<SearchResult[]> {
   const q = tier ? '&tier=' + tier : '';
   const r = await fetch(BASE + '/search/results?sessionId=' + sessionId + q); if (!r.ok) throw new Error('results failed'); return r.json();
+}
+export async function fetchSearchResultsByArtist(sessionId: number, tier?: string): Promise<SearchArtistGroup[]> {
+  const q = tier ? '&tier=' + tier : '';
+  const r = await fetch(BASE + '/search/results-by-artist?sessionId=' + sessionId + q); if (!r.ok) throw new Error('results-by-artist failed'); return r.json();
 }
 export async function reviewSearchResult(id: number) {
   const r = await fetch(BASE + '/search/results/' + id + '/review', { method: 'POST' }); if (!r.ok) throw new Error('review failed'); return r.json();

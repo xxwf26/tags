@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient, useQueries } from '@tanstack/react-query';
-import { fetchTags, fetchTagsAll, fetchArtworks, fetchArtists, fetchArtist, createArtwork, deleteArtwork, setArtworkTags, updateEngage, tagArtwork, tagBatch, confirmArtwork, searchByImage, createTag, updateTag, deleteTag, createDimension, fetchMihuashiFilterChips, fetchOperations, undoOperation, redoOperation, type Artwork, type Artist, uploadReference, fetchReferences, updateReferenceTags, startSearch, fetchSearchSessions, fetchSearchResults, reviewSearchResult, promoteSearchResult, rejectSearchResult, deleteReference, startDiscover, fetchDiscoverTask, fetchDiscoverResults, fetchDiscoverResultsByArtist, fetchDiscoverSessionsList, reviewDiscover, promoteDiscover, rejectDiscover, abortDiscover } from './api'
+import { fetchTags, fetchTagsAll, fetchArtworks, fetchArtists, fetchArtist, createArtwork, deleteArtwork, setArtworkTags, updateEngage, tagArtwork, tagBatch, confirmArtwork, searchByImage, createTag, updateTag, deleteTag, createDimension, fetchMihuashiFilterChips, fetchOperations, undoOperation, redoOperation, type Artwork, type Artist, uploadReference, fetchReferences, updateReferenceTags, startSearch, fetchSearchSessions, fetchSearchResults, fetchSearchResultsByArtist, reviewSearchResult, promoteSearchResult, rejectSearchResult, deleteReference, startDiscover, fetchDiscoverTask, fetchDiscoverResults, fetchDiscoverResultsByArtist, fetchDiscoverSessionsList, reviewDiscover, promoteDiscover, rejectDiscover, abortDiscover } from './api'
 
 export function useTags() {
   return useQuery({ queryKey: ['tags'], queryFn: fetchTags });
@@ -135,20 +135,28 @@ export function useSearchResults(sessionId: number, tier?: string, isRunning?: b
     refetchInterval: isRunning ? 3000 : false,
   });
 }
+export function useSearchResultsByArtist(sessionId: number, tier?: string, isRunning?: boolean) {
+  return useQuery({
+    queryKey: ['search-results-by-artist', sessionId, tier],
+    queryFn: () => fetchSearchResultsByArtist(sessionId, tier),
+    enabled: !!sessionId,
+    refetchInterval: isRunning ? 3000 : false,
+  });
+}
 export function useReviewSearchResult() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (id: number) => reviewSearchResult(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['search-results'] }) });
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['search-results'] }); qc.invalidateQueries({ queryKey: ['search-results-by-artist'] }); } });
 }
 export function usePromoteSearchResult() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (id: number) => promoteSearchResult(id),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['search-results'] }); qc.invalidateQueries({ queryKey: ['artworks'] }); qc.invalidateQueries({ queryKey: ['artists'] }); } });
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['search-results'] }); qc.invalidateQueries({ queryKey: ['search-results-by-artist'] }); qc.invalidateQueries({ queryKey: ['artworks'] }); qc.invalidateQueries({ queryKey: ['artists'] }); } });
 }
 export function useRejectSearchResult() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (id: number) => rejectSearchResult(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['search-results'] }) });
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['search-results'] }); qc.invalidateQueries({ queryKey: ['search-results-by-artist'] }); } });
 }
 export function useDeleteReference() {
   const qc = useQueryClient();
