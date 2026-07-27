@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useReferences, useUploadReference, useStartDiscover, useDiscoverSessions, useDiscoverResults, useDiscoverResultsByArtist, useDiscoverSessionsList, useReviewDiscover, usePromoteDiscover, useRejectDiscover, useDeleteReference, useAbortDiscover } from '../hooks';
 import { proxyImg } from '../api';
 
@@ -52,7 +53,8 @@ export function DiscoverPage() {
   const [activeId, setActiveId] = useState<number | null>(() => { const s = loadSessions(); return s[s.length - 1]?.id ?? null; });
   const [viewResult, setViewResult] = useState<any>(null);
   const [viewIdx, setViewIdx] = useState(0);
-  const [mhsAuthorLoading, setMhsAuthorLoading] = useState(false);
+  const [mhsAuthorLoadingId, setMhsAuthorLoadingId] = useState<number | null>(null);
+  const qc = useQueryClient();
   const [resultView, setResultView] = useState<'grid' | 'artist'>('grid'); // 结果视图：逐张瀑布流 / 按画师聚合
 
   // 并行轮询所有 session 的任务状态（running 的自动刷新，完成的停）
@@ -135,20 +137,22 @@ export function DiscoverPage() {
   }, [viewResult, viewImgs.length]);
 
   // 米画师画师主页：列表接口不返回画师，按需从作品详情接口取。已有 authorUrl 直链，否则调端点补。
+  // 取到后回填服务端缓存 + 刷新结果列表，下次该卡片直接变直链。
   const openMhsAuthor = async (r: any) => {
     if (r.authorUrl) { window.open(r.authorUrl, '_blank', 'noopener'); return; }
-    setMhsAuthorLoading(true);
+    setMhsAuthorLoadingId(r.id);
     try {
       const res = await fetch(`/api/search/results/${r.id}/mhs-author`);
       const j = await res.json();
       if (j.authorUrl) {
         setViewResult((v: any) => v ? { ...v, author: j.author ?? v.author, authorUrl: j.authorUrl } : v);
+        qc.invalidateQueries({ queryKey: ['discover-results'] });
         window.open(j.authorUrl, '_blank', 'noopener');
       } else {
         alert('未能获取画师主页（作品可能已下架或接口未返回画师）');
       }
     } catch { alert('获取画师主页失败，请重试'); }
-    finally { setMhsAuthorLoading(false); }
+    finally { setMhsAuthorLoadingId(null); }
   };
 
   return (
@@ -321,7 +325,15 @@ export function DiscoverPage() {
                   <div className="text-[11px] text-stone-600 truncate">{r.title || '未命名'}</div>
                   <div className="text-[10px] text-stone-400">画师：{r.author || '未知'}</div>
                   <div className="flex items-center justify-between mt-1.5">
-                    <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${TIER_LABEL[r.tier]?.cls || ''}`}>{TIER_LABEL[r.tier]?.label || r.tier}</span>
+                    <div className="flex items-center gap-1">
+                      <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${TIER_LABEL[r.tier]?.cls || ''}`}>{TIER_LABEL[r.tier]?.label || r.tier}</span>
+                      {r.platform === 'mihuashi' && (
+                        <button onClick={(e) => { e.stopPropagation(); openMhsAuthor(r); }} disabled={mhsAuthorLoadingId === r.id}
+                          className="text-[10px] text-sky-600 border border-sky-200 rounded-full px-2 py-0.5 hover:bg-sky-50 disabled:opacity-50" title="跳转画师米画师主页">
+                          {mhsAuthorLoadingId === r.id ? '画师…' : '画师↗'}
+                        </button>
+                      )}
+                    </div>
                     {r.tier === 'tier1' && (
                       <div className="flex gap-1">
                         <button onClick={() => reviewM.mutate(r.id)} disabled={reviewM.isPending} className="text-[10px] text-sky-600 border border-sky-200 rounded-full px-2 py-0.5 hover:bg-sky-50">复核</button>
@@ -388,9 +400,9 @@ export function DiscoverPage() {
               </div>
               <div className="flex gap-2">
                 {viewResult.platform === 'mihuashi' && (
-                  <button onClick={() => openMhsAuthor(viewResult)} disabled={mhsAuthorLoading}
+                  <button onClick={() => openMhsAuthor(viewResult)} disabled={mhsAuthorLoadingId === viewResult.id}
                     className="text-[12px] text-sky-300 border border-sky-300/30 rounded-full px-3 py-1 hover:bg-sky-300/10 disabled:opacity-50">
-                    {mhsAuthorLoading ? '获取画师…' : '画师主页 →'}
+                    {mhsAuthorLoadingId === viewResult.id ? '获取画师…' : '画师主页 →'}
                   </button>
                 )}
                 {viewResult.sourceUrl && <a href={viewResult.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-[12px] text-white/50 border border-white/15 rounded-full px-3 py-1 hover:bg-white/10">查看原页 →</a>}
