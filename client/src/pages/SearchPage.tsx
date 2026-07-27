@@ -140,14 +140,13 @@ export function SearchPage() {
     setShowMerge(false);
   };
 
-  const toggleTag = (id: number) => {
+  // 单击三态循环：未选 → 模糊 → 必中 → 未选
+  const cycleTag = (id: number) => {
     const m = { ...tagModes };
-    if (m[id]) delete m[id]; else m[id] = 'fuzzy';
-    setTagModes(m);
-  };
-  const toggleMode = (id: number) => {
-    const m = { ...tagModes };
-    if (m[id] === 'must') m[id] = 'fuzzy'; else m[id] = 'must';
+    const cur = m[id];
+    if (!cur) m[id] = 'fuzzy';
+    else if (cur === 'fuzzy') m[id] = 'must';
+    else delete m[id];
     setTagModes(m);
   };
   const selectedIds = Object.keys(tagModes).map(Number);
@@ -246,29 +245,38 @@ export function SearchPage() {
           <div className="flex gap-4">
             <img src={ref.imageUrl} className="w-32 h-32 object-cover rounded-xl shrink-0" alt="参考图" />
             <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between mb-1">
-                <div className="text-sm font-medium text-stone-700">AI 标签（点击选/取消，再点切换必中/模糊）</div>
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="text-sm font-medium text-stone-700">AI 画风标签</div>
                 {selectedIds.length > 0 && (
                   <button onClick={() => setTagModes({})} className="text-[11px] text-stone-400 hover:text-rose-500 transition-colors">✕ 清除全部（{selectedIds.length}）</button>
                 )}
               </div>
-              <div className="space-y-1.5 max-h-40 overflow-auto">
+              {/* 图例：说清模糊/必中的实际含义 + 操作方式 */}
+              <div className="flex items-center gap-3 mb-2 text-[11px] text-stone-500 flex-wrap">
+                <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-amber-100 border border-amber-300 inline-block"></span>模糊：仅参与过滤（按比例满足）</span>
+                <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-xhs inline-block"></span>必中：画风类同时作搜索词</span>
+                <span className="text-stone-400">单击切换：未选 → 模糊 → 必中 → 未选</span>
+              </div>
+              <div className="space-y-2 max-h-44 overflow-auto pr-1">
                 {DIM_ROWS.map(row => {
                   const tags = byDim.get(row.code)?.tags ?? [];
                   if (!tags.length) return null;
                   return (
                     <div key={row.code} className="flex items-start gap-2">
-                      <span className="text-[11px] text-stone-400 w-14 shrink-0 pt-0.5">{row.label}</span>
-                      <div className="flex gap-1 flex-wrap">
+                      <span className="text-[11px] text-stone-400 w-10 shrink-0 pt-1">{row.label}</span>
+                      <div className="flex gap-1.5 flex-wrap">
                         {tags.map(t => {
                           const mode = tagModes[t.id];
-                          const selected = !!mode;
+                          const cls = !mode
+                            ? 'bg-white text-stone-500 border-stone-200 hover:border-stone-300'
+                            : mode === 'must'
+                              ? 'bg-xhs text-white border-xhs'
+                              : 'bg-amber-100 text-amber-700 border-amber-300';
+                          const tip = !mode ? '点击选中为模糊' : mode === 'fuzzy' ? '点击切换为必中' : '点击取消';
                           return (
-                            <span key={t.id}>
-                              <span onClick={() => toggleTag(t.id)} title={selected ? '点击取消' : '点击选中'}
-                                className={`text-[11px] px-2 py-0.5 rounded-l-full cursor-pointer border-r-0 border ${selected ? (mode === 'must' ? 'bg-xhs text-white border-xhs' : 'bg-amber-400 text-white border-amber-400') : 'bg-white text-stone-500 border-stone-200 rounded-full'}`}>{t.label}</span>
-                              {selected && <span onClick={() => toggleMode(t.id)} title="切换必中/模糊"
-                                className={`text-[10px] px-1.5 py-0.5 rounded-r-full cursor-pointer border ${mode === 'must' ? 'bg-xhs text-white border-xhs' : 'bg-amber-400 text-white border-amber-400'}`}>{mode === 'must' ? '必' : '模'}</span>}
+                            <span key={t.id} onClick={() => cycleTag(t.id)} title={tip}
+                              className={`text-[12px] px-2.5 py-1 rounded-full cursor-pointer border transition-colors select-none ${cls}`}>
+                              {t.label}{mode && <span className="text-[9px] ml-0.5 opacity-80">{mode === 'must' ? '·必中' : '·模糊'}</span>}
                             </span>
                           );
                         })}
