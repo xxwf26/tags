@@ -52,6 +52,7 @@ export function DiscoverPage() {
   const [activeId, setActiveId] = useState<number | null>(() => { const s = loadSessions(); return s[s.length - 1]?.id ?? null; });
   const [viewResult, setViewResult] = useState<any>(null);
   const [viewIdx, setViewIdx] = useState(0);
+  const [mhsAuthorLoading, setMhsAuthorLoading] = useState(false);
   const [resultView, setResultView] = useState<'grid' | 'artist'>('grid'); // 结果视图：逐张瀑布流 / 按画师聚合
 
   // 并行轮询所有 session 的任务状态（running 的自动刷新，完成的停）
@@ -132,6 +133,23 @@ export function DiscoverPage() {
     };
     window.addEventListener('keydown', h); return () => window.removeEventListener('keydown', h);
   }, [viewResult, viewImgs.length]);
+
+  // 米画师画师主页：列表接口不返回画师，按需从作品详情接口取。已有 authorUrl 直链，否则调端点补。
+  const openMhsAuthor = async (r: any) => {
+    if (r.authorUrl) { window.open(r.authorUrl, '_blank', 'noopener'); return; }
+    setMhsAuthorLoading(true);
+    try {
+      const res = await fetch(`/api/search/results/${r.id}/mhs-author`);
+      const j = await res.json();
+      if (j.authorUrl) {
+        setViewResult((v: any) => v ? { ...v, author: j.author ?? v.author, authorUrl: j.authorUrl } : v);
+        window.open(j.authorUrl, '_blank', 'noopener');
+      } else {
+        alert('未能获取画师主页（作品可能已下架或接口未返回画师）');
+      }
+    } catch { alert('获取画师主页失败，请重试'); }
+    finally { setMhsAuthorLoading(false); }
+  };
 
   return (
     <div className="max-w-[1600px] mx-auto px-3 md:px-6 py-3">
@@ -368,7 +386,15 @@ export function DiscoverPage() {
                 {viewImgs.length > 1 && <button onClick={() => setViewIdx(i => (i - 1 + viewImgs.length) % viewImgs.length)} className="absolute left-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/45 text-white text-xl hover:bg-xhs">‹</button>}
                 {viewImgs.length > 1 && <button onClick={() => setViewIdx(i => (i + 1) % viewImgs.length)} className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/45 text-white text-xl hover:bg-xhs">›</button>}
               </div>
-              {viewResult.sourceUrl && <a href={viewResult.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-[12px] text-white/50 border border-white/15 rounded-full px-3 py-1 hover:bg-white/10">查看原页 →</a>}
+              <div className="flex gap-2">
+                {viewResult.platform === 'mihuashi' && (
+                  <button onClick={() => openMhsAuthor(viewResult)} disabled={mhsAuthorLoading}
+                    className="text-[12px] text-sky-300 border border-sky-300/30 rounded-full px-3 py-1 hover:bg-sky-300/10 disabled:opacity-50">
+                    {mhsAuthorLoading ? '获取画师…' : '画师主页 →'}
+                  </button>
+                )}
+                {viewResult.sourceUrl && <a href={viewResult.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-[12px] text-white/50 border border-white/15 rounded-full px-3 py-1 hover:bg-white/10">查看原页 →</a>}
+              </div>
             </div>
           </div>
         </div>

@@ -7,6 +7,7 @@ import { db, schema } from '../../database/db.js';
 import { eq, and, desc, inArray, isNotNull, sql } from 'drizzle-orm';
 import { searchXhsByKeyword, downloadImage } from '../crawl/xhs.js';
 import { searchWeiboByKeyword } from '../crawl/weibo.js';
+import { fetchMihuashiArtworkAuthor, extractMihuashiArtworkId } from '../crawl/mihuashi.js';
 import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
 import { logOperation } from '../operation/op.js';
 import { loadTaxonomy, extractJson, normalizeOutput, callBoth, callGemini, gateArtwork, isAiConfigured } from '../tagging/ai.js';
@@ -505,5 +506,20 @@ export class SearchService {
     const [result] = await db.select().from(schema.searchResults).where(eq(schema.searchResults.id, id));
     if (!result) throw new Error('结果不存在');
     return promoteSearchResult(result, { filePrefix: 'search', logType: 'search_promote' });
+  }
+
+  // 取米画师结果的画师主页：列表接口不返回画师，按需从作品详情接口补。
+  // 已有 authorUrl 直接返回（缓存）；否则从 sourceUrl 抠 artworkId → fetchMihuashiArtworkAuthor → 回填行。
+  async fetchMhsAuthor(id: number): Promise<{ author: string | null; authorUrl: string | null }> {
+    const [r] = await db.select().from(schema.searchResults).where(eq(schema.searchResults.id, id));
+    if (!r) throw new Error('结果不存在');
+    if (r.authorUrl) return { author: r.author, authorUrl: r.authorUrl };
+    const artworkId = r.sourceUrl ? extractMihuashiArtworkId(r.sourceUrl) : null;
+    if (!artworkId) return { author: r.author, authorUrl: null };
+    const { author, authorUrl } = await fetchMihuashiArtworkAuthor(artworkId);
+    if (author || authorUrl) {
+      await db.update(schema.searchResults).set({ author: author ?? r.author, authorUrl: authorUrl ?? r.authorUrl }).where(eq(schema.searchResults.id, id));
+    }
+    return { author: author ?? r.author, authorUrl };
   }
 }

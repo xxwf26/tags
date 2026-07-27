@@ -64,4 +64,8 @@ export class SearchController {
   // 正式入库
   @Post('results/:id/promote')
   promote(@Param('id', ParseIntPipe) id: number) { return this.searchService.promote(id); }
+
+  // 取米画师结果的画师主页（按需从作品详情接口补，回填缓存）
+  @Get('results/:id/mhs-author')
+  mhsAuthor(@Param('id', ParseIntPipe) id: number) { return this.searchService.fetchMhsAuthor(id); }
 }
