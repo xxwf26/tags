@@ -136,24 +136,31 @@ export function DiscoverPage() {
     window.addEventListener('keydown', h); return () => window.removeEventListener('keydown', h);
   }, [viewResult, viewImgs.length]);
 
-  // 米画师画师主页：列表接口不返回画师，按需从作品详情接口取。已有 authorUrl 直链，否则调端点补。
-  // 取到后回填服务端缓存 + 刷新结果列表，下次该卡片直接变直链。
-  const openMhsAuthor = async (r: any) => {
-    if (r.authorUrl) { window.open(r.authorUrl, '_blank', 'noopener'); return; }
+  // 米画师画师主页/名字：列表接口不返回画师，按需从作品详情接口取。
+  // 取到后回填服务端缓存 + 刷新结果列表，下次该卡片直接有名字/直链。
+  const fetchMhsAuthor = async (r: any) => {
     setMhsAuthorLoadingId(r.id);
     try {
       const res = await fetch(`/api/search/results/${r.id}/mhs-author`);
       const j = await res.json();
-      if (j.authorUrl) {
-        setViewResult((v: any) => v ? { ...v, author: j.author ?? v.author, authorUrl: j.authorUrl } : v);
+      if (j.author || j.authorUrl) {
+        setViewResult((v: any) => v && v.id === r.id ? { ...v, author: j.author ?? v.author, authorUrl: j.authorUrl ?? v.authorUrl } : v);
         qc.invalidateQueries({ queryKey: ['discover-results'] });
-        window.open(j.authorUrl, '_blank', 'noopener');
-      } else {
-        alert('未能获取画师主页（作品可能已下架或接口未返回画师）');
       }
-    } catch { alert('获取画师主页失败，请重试'); }
-    finally { setMhsAuthorLoadingId(null); }
+      return j;
+    } catch { return null; } finally { setMhsAuthorLoadingId(null); }
   };
+  // 详情打开时自动补画师名（名字已有则不重复抓）
+  const fillMhsAuthor = async (r: any) => { if (!r.author) await fetchMhsAuthor(r); };
+  // 画师↗ 按钮：有 authorUrl 直链跳转，否则抓了再跳
+  const openMhsAuthor = async (r: any) => {
+    if (r.authorUrl) { window.open(r.authorUrl, '_blank', 'noopener'); return; }
+    const j = await fetchMhsAuthor(r);
+    if (j?.authorUrl) window.open(j.authorUrl, '_blank', 'noopener');
+    else alert('未能获取画师主页（作品可能已下架或接口未返回画师）');
+  };
+  // 打开大图详情：米画师且无画师名时后台自动补
+  const openViewer = (r: any) => { setViewResult(r); setViewIdx(0); if (r.platform === 'mihuashi') fillMhsAuthor(r); };
 
   return (
     <div className="max-w-[1600px] mx-auto px-3 md:px-6 py-3">
@@ -312,7 +319,7 @@ export function DiscoverPage() {
           <div className="masonry columns-2 md:columns-3 lg:columns-4 xl:columns-5 2xl:columns-6">
             {results.map(r => (
               <div key={r.id} className="mb-2.5 break-inside-avoid bg-white rounded-xl overflow-hidden border border-stone-100 card-hover">
-                <div className="relative cursor-zoom-in" onClick={() => { setViewResult(r); setViewIdx(0); }}>
+                <div className="relative cursor-zoom-in" onClick={() => { openViewer(r); }}>
                   <img src={proxyImg(r.imageUrl)} className="w-full object-cover" style={{ aspectRatio: '3/4' }}
                     onError={e => ((e.target as HTMLImageElement).style.opacity = '0.3')} alt="" />
                   {r.quality != null
@@ -367,7 +374,7 @@ export function DiscoverPage() {
                 </div>
                 <div className="flex gap-1.5 overflow-x-auto pb-1">
                   {g.results.map(r => (
-                    <div key={r.id} className="shrink-0 relative cursor-zoom-in" onClick={() => { setViewResult(r); setViewIdx(0); }}>
+                    <div key={r.id} className="shrink-0 relative cursor-zoom-in" onClick={() => { openViewer(r); }}>
                       <img src={proxyImg(r.imageUrl)} className="h-28 w-auto rounded-lg object-cover" style={{ maxWidth: 160 }}
                         onError={e => ((e.target as HTMLImageElement).style.opacity = '0.3')} alt="" />
                       {r.similarity != null && <span className="absolute top-1 right-1 text-[9px] px-1 py-0.5 rounded bg-xhs/80 text-white">似 {(r.similarity * 100).toFixed(0)}</span>}
