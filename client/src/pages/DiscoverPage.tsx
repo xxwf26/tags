@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useReferences, useUploadReference, useStartDiscover, useDiscoverSessions, useDiscoverResults, useDiscoverResultsByArtist, useDiscoverSessionsList, useReviewDiscover, usePromoteDiscover, useRejectDiscover, useDeleteReference, useAbortDiscover } from '../hooks';
 import { proxyImg } from '../api';
@@ -54,6 +54,8 @@ export function DiscoverPage() {
   const [viewResult, setViewResult] = useState<any>(null);
   const [viewIdx, setViewIdx] = useState(0);
   const [mhsAuthorLoadingId, setMhsAuthorLoadingId] = useState<number | null>(null);
+  const [mhsFillMsg, setMhsFillMsg] = useState<string>('');
+  const mhsFillTimer = useRef<number | null>(null);
   const qc = useQueryClient();
   const [resultView, setResultView] = useState<'grid' | 'artist'>('grid'); // 结果视图：逐张瀑布流 / 按画师聚合
 
@@ -161,6 +163,35 @@ export function DiscoverPage() {
   };
   // 打开大图详情：米画师且无画师名时后台自动补
   const openViewer = (r: any) => { setViewResult(r); setViewIdx(0); if (r.platform === 'mihuashi') fillMhsAuthor(r); };
+
+  // 一键补全本 session 所有米画师结果的画师名（后端串行抓+节流，前端轮询刷新看进度）
+  const fillAllMhsAuthors = async () => {
+    if (!activeId) return;
+    setMhsFillMsg('启动中…');
+    try {
+      const res = await fetch(`/api/search/sessions/${activeId}/fill-mhs-authors`, { method: 'POST' });
+      const j = await res.json();
+      if (!j.pending) { setMhsFillMsg('画师名已齐全，无需补全'); setTimeout(() => setMhsFillMsg(''), 2500); return; }
+      const eta = Math.round(j.pending * 2.8);
+      setMhsFillMsg(`补全中：${j.pending} 张，约 ${eta > 60 ? Math.ceil(eta / 60) + ' 分钟' : eta + ' 秒'}（串行防限流）`);
+      if (mhsFillTimer.current) clearInterval(mhsFillTimer.current);
+      let ticks = 0;
+      mhsFillTimer.current = window.setInterval(() => {
+        qc.invalidateQueries({ queryKey: ['discover-results'] });
+        if (++ticks > 120 && mhsFillTimer.current) { clearInterval(mhsFillTimer.current); mhsFillTimer.current = null; }
+      }, 3000);
+    } catch { setMhsFillMsg('启动失败，请重试'); }
+  };
+  // 缺名数量（用于显示按钮 + 检测补全完成）
+  const mhsMissing = results.filter((r: any) => r.platform === 'mihuashi' && !r.author).length;
+  useEffect(() => {
+    if (mhsFillMsg && !mhsFillMsg.startsWith('补全完成') && mhsMissing === 0 && results.some((r: any) => r.platform === 'mihuashi')) {
+      if (mhsFillTimer.current) { clearInterval(mhsFillTimer.current); mhsFillTimer.current = null; }
+      setMhsFillMsg('补全完成 ✓');
+      const t = setTimeout(() => setMhsFillMsg(''), 3000);
+      return () => clearTimeout(t);
+    }
+  }, [mhsMissing, mhsFillMsg, results]);
 
   return (
     <div className="max-w-[1600px] mx-auto px-3 md:px-6 py-3">
@@ -301,7 +332,11 @@ export function DiscoverPage() {
           <div className="flex items-center justify-between mb-2 px-1">
             <div className="text-[13px] text-stone-500">{activeTask.mode === 'image' && !activeTask.stats?.embedSkipped ? '按画风相似度×质量排序' : '按质量分排序'} · {results.length} 张（AI 已过滤广告/照片/低质）</div>
             {/* 视图切换：逐张 / 按画师聚合——寻源常是"找到画这种风格的人" */}
-            <div className="flex gap-1 text-[11px]">
+            <div className="flex gap-1 text-[11px] items-center">
+              {mhsMissing > 0 && (
+                <button onClick={fillAllMhsAuthors} className="px-2.5 py-1 rounded-full border border-sky-300 text-sky-600 hover:bg-sky-50 mr-1" title="批量抓取本搜索所有米画师结果的画师名（串行，防限流）">补全画师名（{mhsMissing}）</button>
+              )}
+              {mhsFillMsg && <span className="text-sky-600 mr-1">{mhsFillMsg}</span>}
               <button onClick={() => setResultView('grid')} className={`px-2.5 py-1 rounded-full border ${resultView === 'grid' ? 'bg-xhs text-white border-xhs' : 'bg-white text-stone-500 border-stone-200'}`}>逐张</button>
               <button onClick={() => setResultView('artist')} className={`px-2.5 py-1 rounded-full border ${resultView === 'artist' ? 'bg-xhs text-white border-xhs' : 'bg-white text-stone-500 border-stone-200'}`}>按画师</button>
             </div>

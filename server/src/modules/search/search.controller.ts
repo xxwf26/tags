@@ -68,4 +68,8 @@ export class SearchController {
   // 取米画师结果的画师主页（按需从作品详情接口补，回填缓存）
   @Get('results/:id/mhs-author')
   mhsAuthor(@Param('id', ParseIntPipe) id: number) { return this.searchService.fetchMhsAuthor(id); }
+
+  // 批量补全 session 内米画师结果的画师名（后台串行，立即返回）
+  @Post('sessions/:id/fill-mhs-authors')
+  fillMhsAuthors(@Param('id', ParseIntPipe) id: number) { return this.searchService.fillSessionMhsAuthors(id); }
 }

@@ -522,4 +522,29 @@ export class SearchService {
     }
     return { author: author ?? r.author, authorUrl };
   }
+
+  // 批量补全一个 session 内米画师结果的画师名+主页：串行抓 + 节流，防米画师反爬限流。
+  // 后台异步执行（fire-and-forget），立即返回待补数量；前端轮询结果列表看进度。
+  async fillSessionMhsAuthors(sessionId: number): Promise<{ started: true; pending: number }> {
+    const rows = await db.select({ id: schema.searchResults.id, sourceUrl: schema.searchResults.sourceUrl, author: schema.searchResults.author, authorUrl: schema.searchResults.authorUrl })
+      .from(schema.searchResults)
+      .where(and(eq(schema.searchResults.sessionId, sessionId), eq(schema.searchResults.platform, 'mihuashi')));
+    const pending = rows.filter(r => !r.author && !r.authorUrl);
+    // 后台串行补全，不阻塞响应
+    (async () => {
+      for (const r of pending) {
+        const artworkId = r.sourceUrl ? extractMihuashiArtworkId(r.sourceUrl) : null;
+        if (!artworkId) continue;
+        try {
+          const { author, authorUrl } = await fetchMihuashiArtworkAuthor(artworkId);
+          if (author || authorUrl) {
+            await db.update(schema.searchResults).set({ author: author ?? r.author, authorUrl: authorUrl ?? r.authorUrl }).where(eq(schema.searchResults.id, r.id));
+          }
+        } catch (e: any) { console.error(`[search] 批量补画师 ${r.id} 失败: ${e.message}`); }
+        await new Promise(res => setTimeout(res, 800)); // 节流：每次间隔 0.8s 防限流
+      }
+      console.log(`[search] session ${sessionId} 画师名补全完成，共 ${pending.length} 张`);
+    })();
+    return { started: true as const, pending: pending.length };
+  }
 }
