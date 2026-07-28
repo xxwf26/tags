@@ -84,6 +84,26 @@ export class ArtistService {
     return a;
   }
 
+  // 删除画师：连同名下作品一起删（作品软删 deletedAt，可恢复；画师记录物理删）。写审计日志。
+  async remove(id: number) {
+    const [artist] = await db.select().from(schema.artists).where(eq(schema.artists.id, id));
+    if (!artist) throw new Error('画师不存在');
+    // 名下未删作品软删（与 artwork.remove 行为一致：保留图文件与记录，标 deleted_at）
+    const works = await db.select({ id: schema.artworks.id })
+      .from(schema.artworks).where(and(eq(schema.artworks.artistId, id), isNull(schema.artworks.deletedAt)));
+    if (works.length) {
+      await db.update(schema.artworks).set({ deletedAt: new Date() })
+        .where(and(eq(schema.artworks.artistId, id), isNull(schema.artworks.deletedAt)));
+    }
+    await db.delete(schema.artists).where(eq(schema.artists.id, id));
+    await logOperation({
+      type: 'artist_delete', targetType: 'artist', targetId: id,
+      summary: `删除画师「${artist.name}」(#${id})及其 ${works.length} 张作品`,
+      payload: { artistId: id, name: artist.name, artworkIds: works.map(w => w.id) },
+    });
+    return { id, deleted: true, deletedWorks: works.length };
+  }
+
   // 按名字查画师；不存在则新建（录入作品时作者可能未入库）
   async findOrCreateByName(name: string) {
     const all = await db.select().from(schema.artists);

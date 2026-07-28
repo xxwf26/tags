@@ -68,6 +68,11 @@ export async function updateEngage(id: number, body: { engageStatus?: string; en
   if (!r.ok) throw new Error('update engage failed');
   return r.json();
 }
+export async function deleteArtist(id: number): Promise<{ id: number; deleted: boolean; deletedWorks: number }> {
+  const r = await fetch(BASE + '/artists/' + id, { method: 'DELETE' });
+  if (!r.ok) throw new Error('delete artist failed');
+  return r.json();
+}
 export async function createArtwork(fd: FormData): Promise<Artwork> {
   const r = await fetch(BASE + '/artworks', { method: 'POST', body: fd });
   if (!r.ok) throw new Error('create failed');

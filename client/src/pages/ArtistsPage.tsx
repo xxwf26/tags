@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useArtists, useTags } from '../hooks';
+import { useArtists, useTags, useDeleteArtist } from '../hooks';
 import { FilterBar } from '../components/FilterBar';
 import type { Artist, TagNode } from '../api';
 
@@ -44,8 +44,17 @@ function ArtistCard({ a }: { a: Artist }) {
   const plats = platformsOf(a);
   const styles = a.styleHint ?? [];
   const covers = a.coverThumbs ?? [];
+  const delM = useDeleteArtist();
+  const onDelete = (e: React.MouseEvent) => {
+    e.preventDefault(); e.stopPropagation();
+    const n = a.total > 0 ? `\n将同时删除其名下 ${a.total} 张作品（可在操作记录中恢复作品）。` : '';
+    if (confirm(`删除画师「${a.name}」？${n}`)) delM.mutate(a.id);
+  };
   return (
-    <a href={`/artist/${a.id}`} target="_blank" rel="noopener noreferrer" className="group bg-white rounded-2xl overflow-hidden border border-stone-100 card-hover block">
+    <a href={`/artist/${a.id}`} target="_blank" rel="noopener noreferrer" className="group relative bg-white rounded-2xl overflow-hidden border border-stone-100 card-hover block">
+      {/* 删除按钮（阻止冒泡，不触发跳转） */}
+      <button onClick={onDelete} disabled={delM.isPending} title="删除画师"
+        className="absolute top-2 right-2 z-10 w-6 h-6 rounded-full bg-black/45 text-white text-sm flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-rose-500 disabled:opacity-40">×</button>
       {/* 作品预览区 */}
       {covers.length > 0 ? (
         <div className={`grid gap-0.5 aspect-[4/3] ${covers.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>

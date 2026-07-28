@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient, useQueries } from '@tanstack/react-query';
-import { fetchTags, fetchTagsAll, fetchArtworks, fetchArtists, fetchArtist, createArtwork, deleteArtwork, setArtworkTags, updateEngage, tagArtwork, tagBatch, confirmArtwork, searchByImage, createTag, updateTag, deleteTag, createDimension, fetchMihuashiFilterChips, fetchOperations, undoOperation, redoOperation, type Artwork, type Artist, uploadReference, fetchReferences, updateReferenceTags, startSearch, fetchSearchSessions, fetchSearchResults, fetchSearchResultsByArtist, reviewSearchResult, promoteSearchResult, rejectSearchResult, deleteReference, startDiscover, fetchDiscoverTask, fetchDiscoverResults, fetchDiscoverResultsByArtist, fetchDiscoverSessionsList, reviewDiscover, promoteDiscover, rejectDiscover, abortDiscover } from './api'
+import { fetchTags, fetchTagsAll, fetchArtworks, fetchArtists, fetchArtist, createArtwork, deleteArtwork, setArtworkTags, updateEngage, deleteArtist, tagArtwork, tagBatch, confirmArtwork, searchByImage, createTag, updateTag, deleteTag, createDimension, fetchMihuashiFilterChips, fetchOperations, undoOperation, redoOperation, type Artwork, type Artist, uploadReference, fetchReferences, updateReferenceTags, startSearch, fetchSearchSessions, fetchSearchResults, fetchSearchResultsByArtist, reviewSearchResult, promoteSearchResult, rejectSearchResult, deleteReference, startDiscover, fetchDiscoverTask, fetchDiscoverResults, fetchDiscoverResultsByArtist, fetchDiscoverSessionsList, reviewDiscover, promoteDiscover, rejectDiscover, abortDiscover } from './api'
 
 export function useTags() {
   return useQuery({ queryKey: ['tags'], queryFn: fetchTags });
@@ -21,6 +21,13 @@ export function useUpdateEngage(id: number) {
   return useMutation<Artist, Error, { engageStatus?: string; engageNote?: string }>({
     mutationFn: (body) => updateEngage(id, body),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['artist', id] }); qc.invalidateQueries({ queryKey: ['artists'] }); },
+  });
+}
+export function useDeleteArtist() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => deleteArtist(id),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['artists'] }); qc.invalidateQueries({ queryKey: ['artist'] }); qc.invalidateQueries({ queryKey: ['artworks'] }); },
   });
 }
 export function useCreateArtwork() {
