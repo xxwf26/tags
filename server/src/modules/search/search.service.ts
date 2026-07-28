@@ -4,7 +4,7 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { db, schema } from '../../database/db.js';
-import { eq, and, desc, inArray, isNotNull, sql } from 'drizzle-orm';
+import { eq, and, desc, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { searchXhsByKeyword, downloadImage, buildProfileUrl, fetchProfileNotes } from '../crawl/xhs.js';
 import { fetchMihuashiArtworkAuthor, extractMihuashiArtworkId } from '../crawl/mihuashi.js';
 import { aHash, hexToNibbles, hammingNib, DEDUP_THRESHOLD } from '../imghash/imghash.js';
@@ -42,7 +42,7 @@ export class SearchService {
     if (!session) throw new Error('会话不存在');
     const tags = (session.searchTags as any)?.tags ?? [];
     if (!tags.length) throw new Error('该会话无标签');
-    const referenceId = session.referenceImageId ?? 0;
+    const referenceId = session.referenceImageId ?? null;
     const platforms = session.platforms ?? ['xiaohongshu', 'weibo'];
     const fuzzyRatio = (session.searchTags as any)?.fuzzyRatio ?? 0.5;
     const wideNet = (session.searchTags as any)?.wideNet ?? true;
@@ -61,16 +61,22 @@ export class SearchService {
   // tags 支持 mode: 'must'(必中，用作搜索关键词) | 'fuzzy'(模糊，达到比例即满足)
   // keywordMode: 'genre'(默认,只用画风标签搜) | 'all'(继续搜索:用所有标签搜,找不同帖子)
   async startSearch(body: {
-    referenceId: number;
+    referenceId?: number | null;
     tags: { tagId: number; label: string; dimensionId: number | null; mode: 'must' | 'fuzzy' }[];
     platforms?: string[]; fuzzyRatio?: number; keywordMode?: 'genre' | 'all'; wideNet?: boolean;
   }) {
+    // 参考图可选：无图纯标签搜时 referenceId 为 0/undefined/null，统一归一为 null（DB 存 NULL）。
+    // 无图会话按"上一次无图会话"链做 prevSession/isNew。
+    const refId = body.referenceId ? body.referenceId : null;
+    const refCond = refId == null
+      ? isNull(schema.searchSessions.referenceImageId)
+      : eq(schema.searchSessions.referenceImageId, refId);
     // 先创建 session 返回 sessionId，后台异步执行搜索
     const prevSessions = await db.select().from(schema.searchSessions)
-      .where(eq(schema.searchSessions.referenceImageId, body.referenceId)).orderBy(desc(schema.searchSessions.id));
+      .where(refCond).orderBy(desc(schema.searchSessions.id));
     const prevSession = prevSessions[0]?.id ?? null;
     const [sr] = await db.insert(schema.searchSessions).values({
-      referenceImageId: body.referenceId,
+      referenceImageId: refId,
       parentSessionId: prevSession,
       searchTags: { tags: body.tags, fuzzyRatio: body.fuzzyRatio ?? 0.5, wideNet: body.wideNet ?? true },
       platforms: body.platforms ?? ['xiaohongshu'],
@@ -80,9 +86,9 @@ export class SearchService {
 
     // CLIP：对参考图算 embedding 存入 session，供结果相似度排序。worker 不可用则跳过（降级纯质量排序）。
     let refEmbedding: number[] | null = null;
-    if (isEmbedAvailable()) {
+    if (isEmbedAvailable() && refId != null) {
       try {
-        const [ref] = await db.select().from(schema.referenceImages).where(eq(schema.referenceImages.id, body.referenceId));
+        const [ref] = await db.select().from(schema.referenceImages).where(eq(schema.referenceImages.id, refId));
         if (ref?.imageUrl) {
           const refBuf = await readFile(join('uploads', basename(ref.imageUrl)));
           refEmbedding = await embedImage(refBuf);
@@ -91,6 +97,8 @@ export class SearchService {
       } catch (e: any) { console.error(`[search] 参考图 embedding 失败，降级纯质量排序: ${e.message}`); }
     }
 
+    // 就地归一：使 executeSearch 写 result.referenceImageId 时自动落 NULL（无需改 executeSearch）
+    body.referenceId = refId;
     // 异步执行，不阻塞响应
     runningSearches.set(sessionId, false);
     this.executeSearch(sessionId, body, prevSession, refEmbedding).catch(e => {
@@ -344,20 +352,25 @@ export class SearchService {
     return { sessionId, deleted: true, deletedFiles, deletedResults: (deletedResults as any).affectedRows };
   }
 
-  // 删除参考图的所有 session + 结果（清空历史）
+  // 删除参考图的所有 session + 结果（清空历史）。referenceId=0/无 → 清无图会话（IS NULL）。
   async deleteAllSessions(referenceId: number) {
-    const sessions = await db.select().from(schema.searchSessions)
-      .where(eq(schema.searchSessions.referenceImageId, referenceId));
+    const refCond = referenceId
+      ? eq(schema.searchSessions.referenceImageId, referenceId)
+      : isNull(schema.searchSessions.referenceImageId);
+    const sessions = await db.select().from(schema.searchSessions).where(refCond);
     for (const s of sessions) {
       await db.delete(schema.searchResults).where(eq(schema.searchResults.sessionId, s.id));
     }
-    await db.delete(schema.searchSessions).where(eq(schema.searchSessions.referenceImageId, referenceId));
+    await db.delete(schema.searchSessions).where(refCond);
     return { referenceId, deletedSessions: sessions.length };
   }
 
   async listSessions(referenceId: number) {
+    const refCond = referenceId
+      ? eq(schema.searchSessions.referenceImageId, referenceId)
+      : isNull(schema.searchSessions.referenceImageId);
     const sessions = await db.select().from(schema.searchSessions)
-      .where(eq(schema.searchSessions.referenceImageId, referenceId)).orderBy(desc(schema.searchSessions.id));
+      .where(refCond).orderBy(desc(schema.searchSessions.id));
     if (!sessions.length) return sessions;
     // 用实际结果数修正 result_count（中断/失败的 session 可能 result_count=0 但有增量写入的结果）。
     // 单条 GROUP BY 聚合，避免 N+1；running 中的 session 结果数还在变，跳过修正与回写（避免与正在写入的搜索竞争）。

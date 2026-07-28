@@ -171,7 +171,7 @@ export function SearchPage() {
   const saveTags = () => { if (selectedRef) updateTags.mutate({ id: selectedRef, manualTags: selectedIds.map(id => { const t = (ref?.aiTags ?? []).find(a => a.tagId === id); return { tagId: id, label: t?.label ?? '', dimensionId: t?.dimensionId ?? null }; }) }); };
 
   const doSearch = async () => {
-    if (!selectedRef) return;
+    // 参考图可选：无图纯标签搜也允许（referenceId 传 0，后端归一为无图会话）
     // 从 tag tree 查 label（不依赖 aiTags，避免乱码/空）；同时记录哪些顶层维度是 genre 画风
     const allTags: { id: number; label: string; dimensionId: number }[] = [];
     const genreDimIds = new Set<number>();
@@ -194,7 +194,7 @@ export function SearchPage() {
     }
     // 只记录 activeSession，进度/结果轮询由 useSearchSessions / useSearchResults 的 refetchInterval 接管
     // （切页/刷新也能接续，不再依赖组件内的 setInterval）
-    startSearchM.mutate({ referenceId: selectedRef, tags, platforms: [...platforms], fuzzyRatio, wideNet }, {
+    startSearchM.mutate({ referenceId: selectedRef ?? 0, tags, platforms: [...platforms], fuzzyRatio, wideNet }, {
       onSuccess: (r) => { setActiveSession(r.sessionId); refetchSessions(); },
     });
   };
@@ -264,14 +264,14 @@ export function SearchPage() {
         )}
       </div>
 
-      {/* 选中参考图：标签 + 搜索 */}
-      {ref && (
+      {/* 标签选择 + 搜索：常驻可用。参考图可选（选中则显示缩略图 + 自动预填标签）。 */}
+      {(
         <div className="bg-white rounded-2xl p-4 border border-stone-100 mb-3">
           <div className="flex gap-4">
-            <img src={ref.imageUrl} className="w-32 h-32 object-cover rounded-xl shrink-0" alt="参考图" />
+            {ref && <img src={ref.imageUrl} className="w-32 h-32 object-cover rounded-xl shrink-0" alt="参考图" />}
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between mb-1.5">
-                <div className="text-sm font-medium text-stone-700">AI 画风标签</div>
+                <div className="text-sm font-medium text-stone-700">{ref ? 'AI 画风标签' : '画风标签'}</div>
                 {selectedIds.length > 0 && (
                   <button onClick={() => setTagModes({})} className="text-[11px] text-stone-400 hover:text-rose-500 transition-colors">✕ 清除全部（{selectedIds.length}）</button>
                 )}
@@ -396,14 +396,14 @@ export function SearchPage() {
         </div>
       )}
 
-      {/* 搜索历史（session 文件夹，区分管理） */}
-      {selectedRef && sessions.length > 0 && (
+      {/* 搜索历史（session 文件夹，区分管理）。无图会话 referenceId 传 0。 */}
+      {sessions.length > 0 && (
         <div className="bg-white rounded-2xl p-4 border border-stone-100 mb-3">
           <div className="flex items-center justify-between mb-2">
             <h3 className="font-semibold text-stone-700 text-[14px]">搜索历史（{sessions.length} 次，不覆盖）</h3>
             <div className="flex items-center gap-2">
               <span className="text-[11px] text-stone-400">每次搜索独立保留，标新增</span>
-              <button onClick={() => { if (confirm('清空所有搜索历史及其结果？')) { fetch(BASE + '/search/sessions-all?referenceId=' + selectedRef, { method: 'DELETE' }).then(() => { refetchSessions(); setActiveSession(null); }); } }}
+              <button onClick={() => { if (confirm('清空所有搜索历史及其结果？')) { fetch(BASE + '/search/sessions-all?referenceId=' + (selectedRef ?? 0), { method: 'DELETE' }).then(() => { refetchSessions(); setActiveSession(null); }); } }}
                 className="text-[11px] text-rose-500 border border-rose-200 rounded-full px-2 py-0.5 hover:bg-rose-50">清空全部</button>
             </div>
           </div>
@@ -494,7 +494,7 @@ export function SearchPage() {
         </div>
       )}
       {activeSession && !running && !artistGroups.length && <div className="text-center text-stone-400 py-12">该搜索未找到画师</div>}
-      {!activeSession && selectedRef && sessions.length > 0 && <div className="text-center text-stone-400 py-8">选择上方搜索历史查看结果</div>}
+      {!activeSession && sessions.length > 0 && <div className="text-center text-stone-400 py-8">选择上方搜索历史查看结果</div>}
       {/* 大图查看器（一帖多图翻页） */}
       {viewResult && (() => {
         const allImgs: string[] = viewResult.allImages || (viewResult.imageUrl ? [viewResult.imageUrl] : []);

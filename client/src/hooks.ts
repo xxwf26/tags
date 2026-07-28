@@ -122,7 +122,7 @@ export function useSearchSessions(referenceId: number) {
   return useQuery({
     queryKey: ['search-sessions', referenceId],
     queryFn: () => fetchSearchSessions(referenceId),
-    enabled: !!referenceId,
+    enabled: referenceId != null, // 0 = 无图会话历史，也要拉（!!referenceId 会误禁用）
     // 有进行中的 session 时轮询，切回页面自动接续进度（取代旧的手写 setInterval）
     refetchInterval: (q) => (q.state.data?.some((s: any) => s.status === 'running') ? 3000 : false),
   });
