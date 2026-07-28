@@ -252,7 +252,10 @@ export class SearchService {
         if (!judge.isArtist) { dropNotArtist++; console.log(`[search] 丢弃路人 ${profile.nickname || a.nickname}: ${judge.reason}`); return; }
 
         // 是画师：存主页前 N 张作品作为代表作（每张一行 search_result）
+        // allImages 统一存该画师所有代表作的【本地】URL，查看器翻图用本地文件（可靠 + 与封面一致）
         let savedForThis = 0;
+        const localUrls: string[] = [];
+        const rowIds: number[] = [];
         for (const it of items.slice(0, WORKS_PER_ARTIST)) {
           if (isAborted()) break;
           try {
@@ -268,14 +271,15 @@ export class SearchService {
             await mkdir(uploadsDir, { recursive: true });
             const filename = `search-${sessionId}-${++fileSeq}.jpg`;
             await writeFile(join(uploadsDir, filename), buf);
+            const localUrl = `/uploads/${filename}`;
             const isNew = !(imageHash && prevHashes.has(imageHash));
-            await db.insert(schema.searchResults).values({
+            const [ins] = await db.insert(schema.searchResults).values({
               sessionId,
               referenceImageId: body.referenceId,
               platform: 'xiaohongshu',
               sourceUrl: it.url,
-              imageUrl: `/uploads/${filename}`,
-              allImages: items.map(x => x.url),
+              imageUrl: localUrl,
+              allImages: [localUrl], // 先占位，循环结束后统一回填该画师全部本地URL
               aiTags: [{ isArtist: true, artRatio: judge.artRatio, style: judge.style, reason: judge.reason }] as any,
               imageHash: imageHash || null,
               similarity: null,
@@ -287,9 +291,15 @@ export class SearchService {
               isNew: isNew ? 1 : 0,
               tier: 'tier1',
             });
+            localUrls.push(localUrl);
+            rowIds.push((ins as any).insertId);
             totalResults++; savedForThis++;
             if (isNew) newResults++;
           } catch (e: any) { console.error(`[search] 存作品失败: ${e.message}`); }
+        }
+        // 回填：该画师所有代表作行共享同一份本地URL列表，查看器翻图才能在画师内切换
+        if (rowIds.length) {
+          await db.update(schema.searchResults).set({ allImages: localUrls }).where(inArray(schema.searchResults.id, rowIds));
         }
         if (savedForThis) keptArtists++;
         // 轻微限速，降低主页密集访问被限流的概率
