@@ -361,9 +361,9 @@ export function DiscoverPage() {
             </div>
           )}
           {resultView === 'grid' && (
-          <div className="masonry columns-2 md:columns-3 lg:columns-4 xl:columns-5 2xl:columns-6">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-2.5">
             {results.map(r => (
-              <div key={r.id} className="mb-2.5 break-inside-avoid bg-white rounded-xl overflow-hidden border border-stone-100 card-hover">
+              <div key={r.id} className="bg-white rounded-xl overflow-hidden border border-stone-100 card-hover">
                 <div className="relative cursor-zoom-in" onClick={() => { openViewer(r); }}>
                   <img src={proxyImg(r.imageUrl)} className="w-full object-cover" style={{ aspectRatio: '3/4' }}
                     onError={e => ((e.target as HTMLImageElement).style.opacity = '0.3')} alt="" />
