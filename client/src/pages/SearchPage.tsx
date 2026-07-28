@@ -458,12 +458,25 @@ export function SearchPage() {
                   {g.style && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-600">画风：{g.style}</span>}
                   {g.authorUrl && <a href={g.authorUrl} target="_blank" rel="noopener noreferrer" className="text-[11px] text-sky-600 hover:underline">主页 ↗</a>}
                   {g.styleTags.length > 0 && <span className="text-[10px] text-stone-400">命中：{g.styleTags.slice(0, 6).join(' / ')}</span>}
-                  {/* 建联：把该画师所有代表作入库 → 自动建画师记录 + 存主页链接到 artists 表 */}
-                  {g.results.some(r => r.tier === 'tier1' || r.tier === 'tier2') && (
-                    <button
-                      onClick={() => g.results.filter(r => r.tier === 'tier1' || r.tier === 'tier2').forEach(r => { if (r.tier === 'tier1') reviewM.mutate(r.id); promoteM.mutate(r.id); })}
-                      className="ml-auto text-[11px] text-xhs border border-xhs/30 rounded-full px-2.5 py-0.5 hover:bg-xhs-soft">入库建联</button>
-                  )}
+                  {/* 两步入库：① 复核 tier1→tier2（人工挑选满意的画师）② 入库建联 tier2→promoted（建画师记录+存主页链接）。
+                      按画师整组的状态显示对应按钮，避免对同一行并发 review+promote。 */}
+                  {(() => {
+                    const t1 = g.results.filter(r => r.tier === 'tier1');
+                    const t2 = g.results.filter(r => r.tier === 'tier2');
+                    if (t1.length > 0) return (
+                      <div className="ml-auto flex items-center gap-1.5">
+                        <button onClick={() => t1.forEach(r => rejectM.mutate(r.id))}
+                          className="text-[11px] text-stone-400 border border-stone-200 rounded-full px-2.5 py-0.5 hover:bg-stone-50">丢弃</button>
+                        <button onClick={() => t1.forEach(r => reviewM.mutate(r.id))}
+                          className="text-[11px] text-sky-600 border border-sky-300/60 rounded-full px-2.5 py-0.5 hover:bg-sky-50">复核</button>
+                      </div>
+                    );
+                    if (t2.length > 0) return (
+                      <button onClick={() => t2.forEach(r => promoteM.mutate(r.id))}
+                        className="ml-auto text-[11px] text-xhs border border-xhs/30 rounded-full px-2.5 py-0.5 hover:bg-xhs-soft">入库建联</button>
+                    );
+                    return <span className="ml-auto text-[11px] text-emerald-600">✓ 已入库</span>;
+                  })()}
                 </div>
                 <div className="flex gap-2 overflow-x-auto pb-1">
                   {g.results.map(r => (
