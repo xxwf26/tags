@@ -192,6 +192,7 @@ export type SearchResult = {
 export type SearchArtistGroup = {
   author: string | null; authorUrl: string | null; platform: string | null;
   count: number; artRatio: number | null; style?: string; styleTags: string[]; results: SearchResult[];
+  alreadyInLibrary?: boolean;
 };
 export async function uploadReference(file: File): Promise<ReferenceImage> {
   const fd = new FormData(); fd.append('file', file);

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { SearchResult, SearchArtistGroup } from '../api';
 import { useReferences, useUploadReference, useUpdateReferenceTags, useStartSearch, useSearchSessions, useSearchResults, useSearchResultsByArtist, useReviewSearchResult, usePromoteSearchResult, useRejectSearchResult, useDeleteReference, useTags } from '../hooks';
 import { tagsByTopDim, proxyImg } from '../api';
@@ -31,11 +31,16 @@ export function SearchPage() {
   const [tagModes, setTagModes] = useState<Record<number, 'must' | 'fuzzy'>>({});
   const [xhsCookie, setXhsCookie] = useState('');
   const [cookieSaved, setCookieSaved] = useState(false);
-  const [cookieStatus, setCookieStatus] = useState<{hasCookie: boolean} | null>(null);
-
-  useEffect(() => {
-    fetch(BASE + '/settings/xhs-cookie').then(res => res.json()).then(setCookieStatus);
-  }, [cookieSaved]);
+  const [cookieCheck, setCookieCheck] = useState<{ status: string; error?: string } | null>(null);
+  const [cookieProbing, setCookieProbing] = useState(false);
+  const refreshCookieCheck = useCallback(() => {
+    fetch(BASE + '/settings/xhs-cookie-check').then(res => res.json()).then(setCookieCheck).catch(() => {});
+  }, []);
+  useEffect(() => { refreshCookieCheck(); }, [cookieSaved, refreshCookieCheck]);
+  const probeCookie = () => {
+    setCookieProbing(true);
+    fetch(BASE + '/settings/xhs-cookie-check?probe=1').then(res => res.json()).then(r => { setCookieCheck(r); setCookieProbing(false); }).catch(() => setCookieProbing(false));
+  };
   const [fuzzyRatio, setFuzzyRatio] = useState(1);
   const [platforms, setPlatforms] = useState<Set<string>>(new Set(['xiaohongshu']));
   const [wideNet, setWideNet] = useState(true); // 约稿广撒网：并行搜约稿身份词最大范围捞画师
@@ -171,6 +176,12 @@ export function SearchPage() {
   const saveTags = () => { if (selectedRef) updateTags.mutate({ id: selectedRef, manualTags: selectedIds.map(id => { const t = (ref?.aiTags ?? []).find(a => a.tagId === id); return { tagId: id, label: t?.label ?? '', dimensionId: t?.dimensionId ?? null }; }) }); };
 
   const doSearch = async () => {
+    // cookie 预检：失效/缺登录态直接提示，不白跑（item 5）
+    const cs = cookieCheck?.status;
+    if (cs === 'missing' || cs === 'no_session' || cs === 'expired') {
+      alert(cs === 'missing' ? '小红书 cookie 未设置，请先在上方粘贴或扫码登录。' : cs === 'expired' ? '小红书 cookie 已失效，请重新获取（F12 → Network → Cookie）或扫码登录。' : 'cookie 缺少 web_session 登录态，请重新粘贴完整 cookie 或扫码登录。');
+      return;
+    }
     // 参考图可选：无图纯标签搜也允许（referenceId 传 0，后端归一为无图会话）
     // 从 tag tree 查 label（不依赖 aiTags，避免乱码/空）；同时记录哪些顶层维度是 genre 画风
     const allTags: { id: number; label: string; dimensionId: number }[] = [];
@@ -209,6 +220,18 @@ export function SearchPage() {
 
   const results = resultsQ.data ?? [];
   const artistGroups: SearchArtistGroup[] = artistsQ.data ?? [];
+  // 排序/筛选（item 1）：画师多了要能挑
+  const [sortBy, setSortBy] = useState<'default' | 'artRatio' | 'count' | 'styleTags'>('default');
+  const [filterText, setFilterText] = useState('');
+  const shownGroups = useMemo(() => {
+    let gs = artistGroups;
+    const q = filterText.trim().toLowerCase();
+    if (q) gs = gs.filter(g => (g.author || '').toLowerCase().includes(q) || (g.style || '').toLowerCase().includes(q) || g.styleTags.some(t => t.toLowerCase().includes(q)));
+    if (sortBy === 'artRatio') gs = [...gs].sort((a, b) => (b.artRatio ?? 0) - (a.artRatio ?? 0));
+    else if (sortBy === 'count') gs = [...gs].sort((a, b) => b.count - a.count);
+    else if (sortBy === 'styleTags') gs = [...gs].sort((a, b) => b.styleTags.length - a.styleTags.length);
+    return gs;
+  }, [artistGroups, sortBy, filterText]);
 
   const saveCookie = () => {
     if (!xhsCookie.trim()) return;
@@ -232,7 +255,19 @@ export function SearchPage() {
       {/* 小红书 Cookie 管理 */}
       <div className="bg-white rounded-2xl p-3 border border-stone-100 mb-3 flex items-center gap-2 flex-wrap">
         <span className="text-[12px] text-stone-500 shrink-0">🔑 小红书 Cookie：</span>
-        {cookieStatus?.hasCookie ? <span className="text-[11px] text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">已设置</span> : <span className="text-[11px] text-rose-500 bg-rose-50 px-2 py-0.5 rounded-full">未设置（搜索无结果）</span>}
+        {(() => {
+          const s = cookieCheck?.status;
+          const map: Record<string, { txt: string; cls: string }> = {
+            missing: { txt: '未设置（搜索无结果）', cls: 'text-rose-500 bg-rose-50' },
+            no_session: { txt: '缺少登录态 web_session', cls: 'text-rose-500 bg-rose-50' },
+            expired: { txt: '已失效，请更新', cls: 'text-rose-500 bg-rose-50' },
+            ok: { txt: '已设置（未验证）', cls: 'text-emerald-600 bg-emerald-50' },
+            error: { txt: '检测失败', cls: 'text-amber-600 bg-amber-50' },
+          };
+          const m = map[s || ''] || { txt: '检测中…', cls: 'text-stone-400 bg-stone-50' };
+          return <span className={`text-[11px] px-2 py-0.5 rounded-full ${m.cls}`}>{m.txt}</span>;
+        })()}
+        <button onClick={probeCookie} disabled={cookieProbing} className="text-[11px] text-stone-500 border border-stone-200 rounded-full px-2 py-0.5 hover:bg-stone-50 disabled:opacity-40">{cookieProbing ? '测试中…' : '🧪 测试'}</button>
         <input value={xhsCookie} onChange={e => setXhsCookie(e.target.value)} placeholder="粘贴小红书 cookie（F12 → Network → Cookie 请求头）" className="flex-1 min-w-[200px] text-[12px] border border-stone-200 rounded-full px-3 py-1.5" />
         <button onClick={saveCookie} disabled={!xhsCookie.trim()} className="text-[12px] bg-xhs text-white rounded-full px-3 py-1.5 font-medium disabled:opacity-40">{cookieSaved ? '✓ 已保存' : '保存'}</button>
         <button onClick={qrLoginXhs} disabled={qrLogin.pending} className="text-[12px] bg-violet-600 text-white rounded-full px-3 py-1.5 font-medium disabled:opacity-40">{qrLogin.pending ? '等待扫码…' : '📱 扫码登录'}</button>
@@ -447,12 +482,22 @@ export function SearchPage() {
       {/* 搜索结果：按画师聚合（寻源目标是找画师建联，不是攒作品） */}
       {activeSession && artistGroups.length > 0 && (
         <div>
-          <div className="text-[13px] text-stone-500 mb-2 px-1">找到 <span className="text-xhs font-medium">{artistGroups.length}</span> 位画师（共 {results.length} 张代表作）</div>
+          <div className="flex items-center justify-between mb-2 px-1 gap-2 flex-wrap">
+            <div className="text-[13px] text-stone-500">找到 <span className="text-xhs font-medium">{artistGroups.length}</span> 位画师（共 {results.length} 张代表作）{filterText.trim() && <span className="text-stone-400">· 筛选后 {shownGroups.length}</span>}</div>
+            {/* 排序/筛选（item 1） */}
+            <div className="flex items-center gap-1.5 text-[11px]">
+              <input value={filterText} onChange={e => setFilterText(e.target.value)} placeholder="筛选画师名/画风…" className="w-36 text-[11px] border border-stone-200 rounded-full px-2.5 py-1" />
+              {([['default', '默认'], ['artRatio', '画作占比'], ['count', '代表作数'], ['styleTags', '命中标签']] as const).map(([k, label]) => (
+                <button key={k} onClick={() => setSortBy(k)} className={`px-2 py-1 rounded-full border ${sortBy === k ? 'bg-xhs text-white border-xhs' : 'bg-white text-stone-500 border-stone-200'}`}>{label}</button>
+              ))}
+            </div>
+          </div>
           <div className="space-y-2.5">
-            {artistGroups.map((g, gi) => (
+            {shownGroups.map((g, gi) => (
               <div key={g.authorUrl || g.author || gi} className="bg-white rounded-xl border border-stone-100 p-3 card-hover">
                 <div className="flex items-center gap-2 flex-wrap mb-2">
                   <span className="text-[13px] font-semibold text-stone-700">{g.author || '未知作者'}</span>
+                  {g.alreadyInLibrary && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700" title="该画师已在画师库中（跨搜索去重）">已在库</span>}
                   <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-xhs-soft text-xhs">{g.count} 张代表作</span>
                   {g.artRatio != null && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-50 text-violet-600">画作占比 {Math.round(g.artRatio * 100)}%</span>}
                   {g.style && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-600">画风：{g.style}</span>}

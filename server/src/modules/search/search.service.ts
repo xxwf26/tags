@@ -421,11 +421,12 @@ export class SearchService {
     const groups = new Map<string, {
       author: string | null; authorUrl: string | null; platform: string | null;
       count: number; artRatio: number | null; style: string; styleTags: string[]; results: any[];
+      alreadyInLibrary: boolean;
     }>();
     for (const r of rows) {
       const key = r.authorUrl || r.author?.trim() || '__unknown__';
       let g = groups.get(key);
-      if (!g) { g = { author: r.author?.trim() || null, authorUrl: r.authorUrl ?? null, platform: r.platform, count: 0, artRatio: null, style: '', styleTags: [], results: [] }; groups.set(key, g); }
+      if (!g) { g = { author: r.author?.trim() || null, authorUrl: r.authorUrl ?? null, platform: r.platform, count: 0, artRatio: null, style: '', styleTags: [], results: [], alreadyInLibrary: false }; groups.set(key, g); }
       g.count++;
       g.results.push(r);
       if (!g.authorUrl && r.authorUrl) g.authorUrl = r.authorUrl;
@@ -435,6 +436,18 @@ export class SearchService {
       if (typeof ar === 'number' && (g.artRatio == null || ar > g.artRatio)) g.artRatio = ar;
       if (!g.style && tag0?.style) g.style = String(tag0.style);
       for (const t of (r.tags as string[] | null) || []) if (t && !g.styleTags.includes(t)) g.styleTags.push(t);
+    }
+    // 跨 session 去重标记：查 artists 表，名字或主页链接已存在的画师标 alreadyInLibrary，
+    // 避免对已入库画师重复建联。匹配靠 name 精确 + links 里收集的 URL 集合。
+    const libArtists = await db.select({ name: schema.artists.name, links: schema.artists.links }).from(schema.artists);
+    const nameSet = new Set(libArtists.map(a => (a.name || '').trim()).filter(Boolean));
+    const urlSet = new Set<string>();
+    for (const a of libArtists) {
+      const links = a.links as Record<string, string[]> | null;
+      if (links) for (const urls of Object.values(links)) if (Array.isArray(urls)) for (const u of urls) if (u) urlSet.add(u);
+    }
+    for (const g of groups.values()) {
+      g.alreadyInLibrary = !!(g.author && nameSet.has(g.author.trim())) || !!(g.authorUrl && urlSet.has(g.authorUrl));
     }
     // 有署名的按代表作数降序在前，未知作者组固定垫底
     return [...groups.values()].sort((a, b) => {

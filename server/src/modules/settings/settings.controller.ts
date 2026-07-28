@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body } from '@nestjs/common';
+import { Controller, Get, Post, Body, Query } from '@nestjs/common';
 import { SettingsService } from './settings.service.js';
 import { execFile } from 'node:child_process';
 import { join } from 'node:path';
@@ -19,6 +19,21 @@ export class SettingsController {
   async xhsCookie() {
     const cookie = await this.settingsService.getXhsCookie();
     return { hasCookie: !!cookie, preview: cookie ? cookie.slice(0, 40) + '...' : null };
+  }
+
+  // cookie 有效性检测：missing=未设 / no_session=缺 web_session 登录态 / ok=有登录态(未真实验证)
+  // ?probe=1 时真实探测：用搜索接口试一下能否返回结果（起子进程，慢，仅手动测试用）
+  @Get('xhs-cookie-check')
+  async xhsCookieCheck(@Query('probe') probe?: string): Promise<{ status: string; error?: string }> {
+    const cookie = await this.settingsService.getXhsCookie();
+    if (!cookie) return { status: 'missing' };
+    if (!cookie.includes('web_session')) return { status: 'no_session' };
+    if (probe !== '1') return { status: 'ok' };
+    try {
+      const { searchXhsByKeyword } = await import('../crawl/xhs.js');
+      const notes = await searchXhsByKeyword('插画', 1, cookie);
+      return { status: notes.length > 0 ? 'ok' : 'expired' };
+    } catch (e: any) { return { status: 'error', error: e.message }; }
   }
 
   @Post('xhs-cookie')
