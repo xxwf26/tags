@@ -467,7 +467,7 @@ export function SearchPage() {
                 </div>
                 <div className="flex gap-2 overflow-x-auto pb-1">
                   {g.results.map(r => (
-                    <div key={r.id} className="relative shrink-0 cursor-pointer" onClick={() => setViewResult(r)}>
+                    <div key={r.id} className="relative shrink-0 cursor-pointer" onClick={() => { setViewResult(r); const cover = r.imageUrl || ''; const list: string[] = (r as any).allImages?.length ? (r as any).allImages : (cover ? [cover] : []); const idx = list.indexOf(cover); setViewImgIdx(idx >= 0 ? idx : 0); }}>
                       <img src={proxyImg(r.imageUrl)} className="h-28 rounded-lg object-cover border border-stone-100" style={{ maxWidth: 160 }} alt="" onError={e => ((e.target as HTMLImageElement).style.opacity = '0.3')} />
                       {r.tier === 'promoted' && <span className="absolute top-1 right-1 text-[10px] px-1 rounded bg-emerald-500 text-white">✓</span>}
                       {r.tier === 'tier2' && <span className="absolute top-1 right-1 text-[9px] px-1 rounded bg-sky-500 text-white">复核</span>}
@@ -484,7 +484,9 @@ export function SearchPage() {
       {!activeSession && selectedRef && sessions.length > 0 && <div className="text-center text-stone-400 py-8">选择上方搜索历史查看结果</div>}
       {/* 大图查看器（一帖多图翻页） */}
       {viewResult && (() => {
-        const allImgs: string[] = viewResult.allImages || (viewResult.imageUrl ? [viewResult.imageUrl] : []);
+        const rawAll: string[] = viewResult.allImages || [];
+        // 封面(imageUrl)必须在列表里且作为打开默认图，避免"封面≠大图"。旧数据 allImages 是外链不含本地封面 → 前置封面。
+        const allImgs: string[] = rawAll.includes(viewResult.imageUrl) ? rawAll : (viewResult.imageUrl ? [viewResult.imageUrl, ...rawAll] : rawAll);
         const img = allImgs[viewImgIdx] || '';
         return (
           <div className="fixed inset-0 bg-black/92 z-[60] flex flex-col" onClick={() => { setViewResult(null); setViewImgIdx(0); }}>
