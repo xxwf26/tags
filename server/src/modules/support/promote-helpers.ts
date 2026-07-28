@@ -21,6 +21,10 @@ export async function findDuplicateArtwork(hash: string | null): Promise<number 
 }
 
 // 按署名找画师，找不到就建。links 仅在新建时写入。
+// 应用层并发防护：artists.name 无唯一约束（允许合法重名画师），故 catch 兜不住并发重复。
+// 用进程内 per-name 锁串行化"同名建画师"——同一画师的多张代表作并发 promote 时，
+// 后来者 await 第一个的建库结果并复用，避免产生 N 个同名重复画师。
+const artistCreateLocks = new Map<string, Promise<number | null>>();
 export async function findOrCreateArtist(
   name: string | null,
   platform?: string | null,
@@ -33,15 +37,31 @@ export async function findOrCreateArtist(
     .from(schema.artists).where(eq(schema.artists.name, trimmed)).limit(1);
   if (existing) return existing.id;
 
+  // 已有同名建库进行中 → 复用其结果，不再各自插入
+  const inflight = artistCreateLocks.get(trimmed);
+  if (inflight) return inflight;
+
   const links = platform ? { [platform]: sourceUrl ? [sourceUrl] : [] } : undefined;
-  try {
-    const [ar] = await db.insert(schema.artists).values({ name: trimmed, links });
-    return (ar as any).insertId;
-  } catch (e) {
-    const [again] = await db.select({ id: schema.artists.id })
+  const task = (async (): Promise<number | null> => {
+    // 拿到锁后再查一次（可能在等待期间别的请求已建好）
+    const [again0] = await db.select({ id: schema.artists.id })
       .from(schema.artists).where(eq(schema.artists.name, trimmed)).limit(1);
-    if (again) return again.id;
-    throw e;
+    if (again0) return again0.id;
+    try {
+      const [ar] = await db.insert(schema.artists).values({ name: trimmed, links });
+      return (ar as any).insertId;
+    } catch (e) {
+      const [again] = await db.select({ id: schema.artists.id })
+        .from(schema.artists).where(eq(schema.artists.name, trimmed)).limit(1);
+      if (again) return again.id;
+      throw e;
+    }
+  })();
+  artistCreateLocks.set(trimmed, task);
+  try {
+    return await task;
+  } finally {
+    artistCreateLocks.delete(trimmed);
   }
 }
 

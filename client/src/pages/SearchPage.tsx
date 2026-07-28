@@ -459,20 +459,25 @@ export function SearchPage() {
                   {g.authorUrl && <a href={g.authorUrl} target="_blank" rel="noopener noreferrer" className="text-[11px] text-sky-600 hover:underline">主页 ↗</a>}
                   {g.styleTags.length > 0 && <span className="text-[10px] text-stone-400">命中：{g.styleTags.slice(0, 6).join(' / ')}</span>}
                   {/* 两步入库：① 复核 tier1→tier2（人工挑选满意的画师）② 入库建联 tier2→promoted（建画师记录+存主页链接）。
-                      按画师整组的状态显示对应按钮，避免对同一行并发 review+promote。 */}
+                      按画师整组的状态显示对应按钮，避免对同一行并发 review+promote。
+                      入库串行（mutateAsync 逐个 await）：同画师多张代表作若并发 promote，会同时 findOrCreateArtist
+                      查不到→各自插入→产生 N 个同名重复画师。串行后第一张建好画师，其余复用。 */}
                   {(() => {
                     const t1 = g.results.filter(r => r.tier === 'tier1');
                     const t2 = g.results.filter(r => r.tier === 'tier2');
+                    const runSerial = async (rows: typeof g.results, m: typeof promoteM) => {
+                      for (const r of rows) { try { await m.mutateAsync(r.id); } catch { /* 单张失败不阻断其余 */ } }
+                    };
                     if (t1.length > 0) return (
                       <div className="ml-auto flex items-center gap-1.5">
-                        <button onClick={() => t1.forEach(r => rejectM.mutate(r.id))}
+                        <button onClick={() => runSerial(t1, rejectM)}
                           className="text-[11px] text-stone-400 border border-stone-200 rounded-full px-2.5 py-0.5 hover:bg-stone-50">丢弃</button>
-                        <button onClick={() => t1.forEach(r => reviewM.mutate(r.id))}
+                        <button onClick={() => runSerial(t1, reviewM)}
                           className="text-[11px] text-sky-600 border border-sky-300/60 rounded-full px-2.5 py-0.5 hover:bg-sky-50">复核</button>
                       </div>
                     );
                     if (t2.length > 0) return (
-                      <button onClick={() => t2.forEach(r => promoteM.mutate(r.id))}
+                      <button onClick={() => runSerial(t2, promoteM)}
                         className="ml-auto text-[11px] text-xhs border border-xhs/30 rounded-full px-2.5 py-0.5 hover:bg-xhs-soft">入库建联</button>
                     );
                     return <span className="ml-auto text-[11px] text-emerald-600">✓ 已入库</span>;
