@@ -2,8 +2,8 @@
 // - findDuplicateArtwork：入库前按感知哈希查库内近重复，防同一张图被反复入库。
 // - findOrCreateArtist：按署名查/建画师，用 WHERE 精确查询（非全表扫）；靠唯一约束兜住并发重名。
 // - promoteSearchResult：tier2 → promoted 的完整入库流程（下载→去重→建作品→建画师→记日志）。
-import { writeFile, mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { writeFile, mkdir, readFile } from 'node:fs/promises';
+import { join, basename } from 'node:path';
 import { db, schema } from '../../database/db.js';
 import { eq } from 'drizzle-orm';
 import { downloadImage } from '../crawl/xhs.js';
@@ -48,13 +48,23 @@ export async function findOrCreateArtist(
 // tier2 → promoted：下载图 → 库内去重 → 建作品 → 建/找画师 → 标记结果 → 记日志。
 // filePrefix 区分文件名前缀与默认 sourcePlatform；logType 区分审计日志类型。
 export async function promoteSearchResult(
-  result: { id: number; imageUrl: string | null; title: string | null; author: string | null; platform: string | null; sourceUrl: string | null },
+  result: { id: number; imageUrl: string | null; title: string | null; author: string | null; platform: string | null; sourceUrl: string | null; authorUrl?: string | null },
   opts: { filePrefix: string; logType: string },
 ): Promise<{ id: number; tier: 'promoted'; artworkId: number; artistId: number | null; duplicate?: boolean }> {
   if (!result.imageUrl) throw new Error('结果无图片URL');
   const uploadsDir = join(process.cwd(), 'uploads');
   await mkdir(uploadsDir, { recursive: true });
-  const { buf, type } = await downloadImage(result.imageUrl);
+  // 寻源/发现的结果 imageUrl 在采集时已下载为本地 /uploads/xxx（见 search/discover.service），
+  // 此时不能再当远程 URL 下载（会 Invalid URL）——直接读本地文件；只有仍是外链时才下载。
+  const isLocal = result.imageUrl.startsWith('/uploads/');
+  let buf: Buffer, type: string;
+  if (isLocal) {
+    buf = await readFile(join(uploadsDir, basename(result.imageUrl)));
+    const ext = result.imageUrl.split('.').pop()?.toLowerCase() || 'jpg';
+    type = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+  } else {
+    ({ buf, type } = await downloadImage(result.imageUrl));
+  }
   let imageHash: string | null = null;
   try { imageHash = await aHash(buf); } catch {}
 
@@ -69,7 +79,9 @@ export async function promoteSearchResult(
   const filename = `${opts.filePrefix}-${result.id}-${Date.now()}.${ext}`;
   await writeFile(join(uploadsDir, filename), buf);
 
-  const artistId = await findOrCreateArtist(result.author, result.platform, result.sourceUrl);
+  // 画师建联链接优先用 authorUrl（画师主页），寻源结果的 sourceUrl 是图片直链，建联点回去无意义。
+  const artistLink = result.authorUrl || result.sourceUrl;
+  const artistId = await findOrCreateArtist(result.author, result.platform, artistLink);
   const [aw] = await db.insert(schema.artworks).values({
     artistId,
     title: result.title || null,
