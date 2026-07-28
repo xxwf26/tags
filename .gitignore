@@ -54,6 +54,7 @@ server/.mhs-chrome-profile/
 
 # 数据交付包（单独发伙伴，不进git）
 server/style_atlas_data.sql
+server/style_atlas_dump.sql
 server/style_atlas_data_package.zip
 server/style_atlas_data_package/
 
