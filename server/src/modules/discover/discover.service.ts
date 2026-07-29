@@ -13,7 +13,7 @@ import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
 import { logOperation } from '../operation/op.js';
 import { gateArtwork } from '../tagging/ai.js';
 import { embedImage, cosine, isEmbedAvailable } from '../embed/clip.js';
-import { findDuplicateArtwork, findOrCreateArtist } from './promote-helpers.js';
+import { promoteSearchResult } from '../support/promote-helpers.js';
 import { Injectable } from '@nestjs/common';
 
 const DEFAULT_PER_KW = 20; // 每平台每关键词召回上限（默认；可被 start 的 perKw 覆盖）
@@ -321,31 +321,13 @@ export class DiscoverService {
     return { id, tier: 'rejected' };
   }
 
-  // 正式入库：下载图 → 建作品 → 建/找画师 → 同步画师库+画廊
+  // 正式入库：与寻源共用 promoteSearchResult（本地图读盘/外链下载→去重→建作品→建画师→记日志）。
+  // 米画师作品列表接口不返回画师，入库前先按需补一次画师名再交给共享入库。
   async promote(id: number) {
     const [result] = await db.select().from(schema.searchResults).where(eq(schema.searchResults.id, id));
     if (!result) throw new Error('结果不存在');
-    if (!result.imageUrl) throw new Error('结果无图片URL');
 
-    const uploadsDir = join(process.cwd(), 'uploads');
-    await mkdir(uploadsDir, { recursive: true });
-    const { buf, type } = await downloadImage(result.imageUrl);
-    let imageHash: string | null = null;
-    try { imageHash = await aHash(buf); } catch {}
-
-    // 库内去重：这张图已在作品库则不重复入库，直接指向已有作品
-    const dupId = await findDuplicateArtwork(imageHash);
-    if (dupId) {
-      await db.update(schema.searchResults).set({ tier: 'promoted', promotedArtworkId: dupId }).where(eq(schema.searchResults.id, id));
-      return { id, tier: 'promoted', artworkId: dupId, duplicate: true };
-    }
-
-    const ext = type.includes('png') ? 'png' : type.includes('webp') ? 'webp' : 'jpg';
-    const filename = `discover-${id}-${Date.now()}.${ext}`;
-    await writeFile(join(uploadsDir, filename), buf);
-
-    // 米画师作品列表接口不返回画师，入库时按需补一次（方案乙）：只对真正要入库的图请求详情，
-    // 省请求、不易触发反爬。同步补——入库虽慢几秒，但结果确定、当场就带画师。
+    // 米画师按需补画师名（方案乙）：只对真正要入库的图请求详情，省请求、不易触发反爬。
     let author = result.author;
     let authorUrl = (result as any).authorUrl as string | null;
     if (result.platform === 'mihuashi' && !author && result.sourceUrl) {
@@ -359,19 +341,9 @@ export class DiscoverService {
       }
     }
 
-    // 找/建画师（按署名精确匹配）。links 优先用画师主页(authorUrl)而非作品页(sourceUrl)，便于后续顺主页挖全集
-    const artistId = await findOrCreateArtist(author, result.platform, authorUrl || result.sourceUrl);
-
-    const [aw] = await db.insert(schema.artworks).values({
-      artistId, title: result.title || null,
-      imageUrl: `/uploads/${filename}`, thumbUrl: `/uploads/${filename}`,
-      imageHash, sourcePlatform: result.platform || 'discover', sourceUrl: result.sourceUrl || null,
-      tagStatus: 'pending',
-    });
-    const artworkId = (aw as any).insertId;
-
-    await db.update(schema.searchResults).set({ tier: 'promoted', promotedArtworkId: artworkId }).where(eq(schema.searchResults.id, id));
-    await logOperation({ type: 'discover_promote', targetType: 'search_result', targetId: id, summary: `发现结果 #${id} 正式入库 → 作品 #${artworkId}` });
-    return { id, tier: 'promoted', artworkId, artistId };
+    return promoteSearchResult(
+      { ...result, author, authorUrl },
+      { filePrefix: 'discover', logType: 'discover_promote' },
+    );
   }
 }
