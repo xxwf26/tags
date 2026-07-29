@@ -182,11 +182,9 @@ export function SearchPage() {
       return;
     }
     // 参考图可选：无图纯标签搜也允许（referenceId 传 0，后端归一为无图会话）
-    // 从 tag tree 查 label（不依赖 aiTags，避免乱码/空）；同时记录哪些顶层维度是 genre 画风
+    // 从 tag tree 查 label（不依赖 aiTags，避免乱码/空）
     const allTags: { id: number; label: string; dimensionId: number }[] = [];
-    const genreDimIds = new Set<number>();
     for (const top of (tagsQ.data ?? [])) {
-      if (top.code === 'genre') { genreDimIds.add(top.id); for (const sub of top.children) genreDimIds.add(sub.id); }
       for (const t of top.tags) allTags.push({ id: t.id, label: t.label, dimensionId: top.id });
       for (const sub of top.children) {
         for (const t of sub.tags) allTags.push({ id: t.id, label: t.label, dimensionId: sub.id });
@@ -196,10 +194,10 @@ export function SearchPage() {
       const t = allTags.find(a => a.id === id);
       return { tagId: id, label: t?.label ?? '', dimensionId: t?.dimensionId ?? null, mode: tagModes[id] };
     });
-    // 空标签兜底：没有画风标签且没开广撒网 → 搜不出东西，提示而非静默搜"插画"
-    const hasGenre = tags.some(t => t.dimensionId != null && genreDimIds.has(t.dimensionId));
-    if (!hasGenre && !wideNet) {
-      alert('未选择画风标签。请手动选画风标签，或开启「约稿广撒网」用约稿词捞画师。');
+    // 空标签兜底：所有维度标签都当搜索词。一个标签都没选、又没开广撒网 → 搜不出东西，
+    // 提示而非静默搜"插画"（开了广撒网则用约稿身份词，允许无标签）。
+    if (!tags.length && !wideNet) {
+      alert('未选择任何标签。请至少选一个标签（画风/技法/题材/用途/色调/人物均可作搜索词），或开启「约稿广撒网」用约稿词捞画师。');
       return;
     }
     // 只记录 activeSession，进度/结果轮询由 useSearchSessions / useSearchResults 的 refetchInterval 接管
@@ -310,11 +308,11 @@ export function SearchPage() {
                   <button onClick={() => setTagModes({})} className="text-[11px] text-stone-400 hover:text-rose-500 transition-colors">✕ 清除全部（{selectedIds.length}）</button>
                 )}
               </div>
-              {/* 图例：说清模糊/必中的实际含义 + 操作方式 */}
+              {/* 图例：所有维度标签都作搜索词；必中/模糊决定用哪些词搜 */}
               <div className="flex items-center gap-3 mb-2 text-[11px] text-stone-500 flex-wrap">
-                <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-amber-100 border border-amber-300 inline-block"></span>模糊：仅参与过滤（按比例满足）</span>
-                <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-xhs inline-block"></span>必中：画风类同时作搜索词</span>
-                <span className="text-stone-400">单击切换：未选 → 模糊 → 必中 → 未选</span>
+                <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-xhs inline-block"></span>必中：只用这些词搜（更聚焦）</span>
+                <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-amber-100 border border-amber-300 inline-block"></span>模糊：没有必中词时才用它搜</span>
+                <span className="text-stone-400">各维度标签均作搜索词 · 单击切换：未选 → 模糊 → 必中 → 未选</span>
               </div>
               <div className="space-y-2 max-h-44 overflow-auto pr-1">
                 {DIM_ROWS.map(row => {

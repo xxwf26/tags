@@ -131,20 +131,11 @@ export class SearchService {
       return st;
     };
 
-    // 加载维度表，解析每个标签的顶层 code（genre/technique/...）
-    const dims = await db.select().from(schema.tagDimensions);
-    const dimById = new Map(dims.map(d => [d.id, d]));
-    const rootCodeOf = (dimId: number | null): string => {
-      if (!dimId) return '';
-      let d = dimById.get(dimId), cur = dimId;
-      while (d && d.parentId) { cur = d.parentId; d = dimById.get(cur); }
-      return d?.code ?? '';
-    };
-
-    // 搜索关键词：用 genre 画风标签搜（召回量大）。用于聚合作者，非逐张处理。
-    const mustGenreTags = body.tags.filter((t: any) => t.mode === 'must' && rootCodeOf(t.dimensionId) === 'genre');
-    const allGenreTags = body.tags.filter((t: any) => rootCodeOf(t.dimensionId) === 'genre');
-    const searchKeywords = (mustGenreTags.length ? mustGenreTags : allGenreTags).map((t: any) => t.label);
+    // 搜索关键词：所有标签平权当搜索词（画风/技法/题材/用途/色调/人物 都参与召回）。
+    // 每个词各自去小红书召回 → 按作者聚合（并集，命中多的排前）。must 优先：有必中标签
+    // 则只用必中的（更聚焦），否则用全部选中标签。空则由下方兜底为 ['插画']。
+    const mustTags = body.tags.filter((t: any) => t.mode === 'must');
+    const searchKeywords = (mustTags.length ? mustTags : body.tags).map((t: any) => t.label).filter(Boolean);
 
     // 取上一次的结果（用于 isNew 判断）
     const prevResults = prevSession ? await db.select().from(schema.searchResults)
