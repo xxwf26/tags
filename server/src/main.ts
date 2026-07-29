@@ -31,6 +31,9 @@ async function bootstrap() {
   await app.listen(port);
   console.log(`style-atlas server on http://localhost:${port}`);
 
+  // 孤儿文件自动清理（启动后5分钟 + 每6小时，无人值守）
+  import('./modules/support/cleanup.js').then(({ startCleanupSchedule }) => startCleanupSchedule()).catch(() => {});
+
   // 启动时把卡住的 running session 标记为 failed（pm2重启会杀掉异步搜索）
   import('./database/db.js').then(async ({ db, schema }) => {
     const { eq } = await import('drizzle-orm');

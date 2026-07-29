@@ -18,7 +18,7 @@ import { promoteSearchResult } from '../support/promote-helpers.js';
 const runningSearches = new Map<number, boolean>(); // sessionId → aborted?
 
 const ARTIST_CAP = 60;          // 单次最多反查多少个作者主页（按命中次数降序取 TopK，防爬爆/限流）
-const ARTIST_CONCURRENCY = 3;   // 并发爬主页数（低并发防反爬）
+const ARTIST_CONCURRENCY = 6;   // 并发爬主页数（判画师号已换更快模型+重试，提到6）
 const COVERS_TO_JUDGE = 6;      // 每个作者取主页前 N 张封面给 AI 判是不是画师号
 const WORKS_PER_ARTIST = 6;     // 判定为画师后，存其主页前 N 张作品作为代表作
 const XHS_RECALL = 300;         // 每个关键词召回帖数（用于聚合作者，非逐张处理）
@@ -241,25 +241,36 @@ export class SearchService {
         const items = (profile.items || []).filter(it => it.url);
         if (!items.length) { skipNoCover++; return; }
 
-        // 下载前 N 张封面 → 判是不是画师号
-        const covers: { b64: string; mime: string }[] = [];
-        for (const it of items.slice(0, COVERS_TO_JUDGE)) {
-          try { covers.push({ b64: (await downloadImage(it.url)).buf.toString('base64'), mime: 'image/jpeg' }); }
-          catch {}
+        // 下载前 N 张封面（索引对齐，失败的留 null）→ 判是不是画师号 + 拿每张质量分
+        const coverN = Math.min(COVERS_TO_JUDGE, items.length);
+        const coverBufs: (Buffer | null)[] = new Array(coverN).fill(null);
+        for (let i = 0; i < coverN; i++) {
+          try { coverBufs[i] = (await downloadImage(items[i].url)).buf; } catch {}
         }
-        if (!covers.length) { skipNoCover++; return; }
-        const judge = await judgeArtistAccount(covers);
+        // judge 输入只放下载成功的，记 idxMap 让 qualities 能映回 items 索引
+        const judgeIdx: number[] = [];
+        const judgeCovers: { b64: string; mime: string }[] = [];
+        coverBufs.forEach((b, i) => { if (b) { judgeCovers.push({ b64: b.toString('base64'), mime: 'image/jpeg' }); judgeIdx.push(i); } });
+        if (!judgeCovers.length) { skipNoCover++; return; }
+        const judge = await judgeArtistAccount(judgeCovers);
         if (!judge.isArtist) { dropNotArtist++; console.log(`[search] 丢弃路人 ${profile.nickname || a.nickname}: ${judge.reason}`); return; }
+        // qualities[i] 对应 judgeCovers[i] → items[judgeIdx[i]]；取某 item 的质量分
+        const qualityOf = (itemIdx: number): number | null => {
+          const j = judgeIdx.indexOf(itemIdx);
+          return j >= 0 ? (judge.qualities[j] ?? null) : null;
+        };
 
         // 是画师：存主页前 N 张作品作为代表作（每张一行 search_result）
-        // allImages 统一存该画师所有代表作的【本地】URL，查看器翻图用本地文件（可靠 + 与封面一致）
+        // 复用已下载的封面 buf（避免重复下载提速）；allImages 统一存该画师所有代表作的【本地】URL
         let savedForThis = 0;
         const localUrls: string[] = [];
         const rowIds: number[] = [];
-        for (const it of items.slice(0, WORKS_PER_ARTIST)) {
+        const storeN = Math.min(WORKS_PER_ARTIST, items.length);
+        const uploadsDir = join(process.cwd(), 'uploads');
+        for (let i = 0; i < storeN; i++) {
           if (isAborted()) break;
           try {
-            const { buf } = await downloadImage(it.url);
+            const buf = coverBufs[i] ?? (await downloadImage(items[i].url)).buf; // 复用封面，缺失才现下
             let imageHash: string | null = null;
             try { imageHash = await aHash(buf); } catch {}
             if (imageHash) {
@@ -267,7 +278,6 @@ export class SearchService {
               if (isDup(nib)) continue; // 该作品已在库/session
               sessionNibs.push(nib);
             }
-            const uploadsDir = join(process.cwd(), 'uploads');
             await mkdir(uploadsDir, { recursive: true });
             const filename = `search-${sessionId}-${++fileSeq}.jpg`;
             await writeFile(join(uploadsDir, filename), buf);
@@ -277,14 +287,14 @@ export class SearchService {
               sessionId,
               referenceImageId: body.referenceId,
               platform: 'xiaohongshu',
-              sourceUrl: it.url,
+              sourceUrl: items[i].url,
               imageUrl: localUrl,
               allImages: [localUrl], // 先占位，循环结束后统一回填该画师全部本地URL
               aiTags: [{ isArtist: true, artRatio: judge.artRatio, style: judge.style, reason: judge.reason }] as any,
               imageHash: imageHash || null,
               similarity: null,
-              quality: null,
-              title: it.title || profile.nickname || a.nickname,
+              quality: qualityOf(i), // AI 给的代表作质量分，用于排序（item 2）
+              title: items[i].title || profile.nickname || a.nickname,
               author: profile.nickname || a.nickname || null,
               authorUrl: url,
               tags: [a.kw],
@@ -429,6 +439,8 @@ export class SearchService {
       if (!g) { g = { author: r.author?.trim() || null, authorUrl: r.authorUrl ?? null, platform: r.platform, count: 0, artRatio: null, style: '', styleTags: [], results: [], alreadyInLibrary: false }; groups.set(key, g); }
       g.count++;
       g.results.push(r);
+      // 代表作按 AI 质量分降序（quality 高的排前展示），null 当 0
+      g.results.sort((a: any, b: any) => (b.quality ?? 0) - (a.quality ?? 0));
       if (!g.authorUrl && r.authorUrl) g.authorUrl = r.authorUrl;
       // 从 aiTags 里取 AI 判定的画师作品占比 + 主页画风概括（新流程存 [{isArtist,artRatio,style,reason}]）
       const tag0 = (r.aiTags as any[])?.[0];

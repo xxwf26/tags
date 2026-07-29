@@ -41,7 +41,6 @@ export function SearchPage() {
     setCookieProbing(true);
     fetch(BASE + '/settings/xhs-cookie-check?probe=1').then(res => res.json()).then(r => { setCookieCheck(r); setCookieProbing(false); }).catch(() => setCookieProbing(false));
   };
-  const [fuzzyRatio, setFuzzyRatio] = useState(1);
   const [platforms, setPlatforms] = useState<Set<string>>(new Set(['xiaohongshu']));
   const [wideNet, setWideNet] = useState(true); // 约稿广撒网：并行搜约稿身份词最大范围捞画师
   const [activeSession, setActiveSession] = useState<number | null>(() => {
@@ -205,7 +204,7 @@ export function SearchPage() {
     }
     // 只记录 activeSession，进度/结果轮询由 useSearchSessions / useSearchResults 的 refetchInterval 接管
     // （切页/刷新也能接续，不再依赖组件内的 setInterval）
-    startSearchM.mutate({ referenceId: selectedRef ?? 0, tags, platforms: [...platforms], fuzzyRatio, wideNet }, {
+    startSearchM.mutate({ referenceId: selectedRef ?? 0, tags, platforms: [...platforms], wideNet }, {
       onSuccess: (r) => { setActiveSession(r.sessionId); refetchSessions(); },
     });
   };
@@ -344,12 +343,6 @@ export function SearchPage() {
                     </div>
                   );
                 })}
-              </div>
-              {/* 模糊比例滑块 */}
-              <div className="flex items-center gap-2 mt-2 text-[11px] text-stone-500">
-                <span>模糊标签满足比例：</span>
-                <input type="range" min="0" max="100" value={Math.round(fuzzyRatio * 100)} onChange={e => setFuzzyRatio(Number(e.target.value) / 100)} className="w-32 accent-xhs" />
-                <span className="text-xhs font-medium">{Math.round(fuzzyRatio * 100)}%</span>
               </div>
               {/* 平台选择 */}
               <div className="flex items-center gap-2 mt-2 text-[11px] text-stone-500">

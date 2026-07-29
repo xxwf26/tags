@@ -120,7 +120,10 @@ export async function callGemini(b64: string, mime: string, prompt: string): Pro
 }
 
 // 多图一次调用：把多张图放进同一个 user turn，适合"给整组图做一个整体判断"（如判画师主页画风构成）
-export async function callGeminiMulti(imgs: { b64: string; mime: string }[], prompt: string): Promise<string | null> {
+// model/timeoutMs 可选：判画师号可用更快模型 + 更短超时配合重试。
+export async function callGeminiMulti(imgs: { b64: string; mime: string }[], prompt: string, opts?: { model?: string; timeoutMs?: number }): Promise<string | null> {
+  const model = opts?.model || GEMINI_MODEL;
+  const timeoutMs = opts?.timeoutMs ?? 120000;
   const body = {
     systemInstruction: { parts: [{ text: prompt }] },
     contents: [{ role: 'user', parts: [
@@ -129,9 +132,9 @@ export async function callGeminiMulti(imgs: { b64: string; mime: string }[], pro
     ] }],
     generationConfig: { temperature: 0, maxOutputTokens: 1024, responseMimeType: 'application/json' },
   };
-  const res = await fetch(`${AI_BASE}/gemini/v1beta/models/${GEMINI_MODEL}:generateContent`, {
+  const res = await fetch(`${AI_BASE}/gemini/v1beta/models/${model}:generateContent`, {
     method: 'POST', headers: { Authorization: `Bearer ${AI_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body), signal: AbortSignal.timeout(120000),
+    body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs),
   });
   const json: any = await res.json();
   if (json.error) throw new Error(`gemini: ${json.error.message}`);
@@ -250,39 +253,59 @@ export async function gateAndTag(b64: string, mime: string, tax: Taxonomy): Prom
 // 判画师号：给一个账号主页的多张笔记封面，整体判断这是不是「画师/插画创作者」账号。
 // 寻源新逻辑的核心——过滤标准是「作者是不是画师」而非「单张作品质量/画风」。
 // 主页以原创绘画为主 = 画师（留）；穿搭/美食/日常/自拍/摄影/搬运转发为主 = 路人（丢）。
-const ARTIST_JUDGE_PROMPT = `你是画师星探。给你的是某个社交账号主页最近若干篇笔记的封面图，请整体判断这个账号是不是「画师/插画创作者」账号。
-只输出 JSON，格式：{"is_artist":true/false,"art_ratio":0.0~1.0,"style":"...","reason":"..."}
+// 同时给每张封面打质量分（0-10），用于代表作排序——qualities[i] 与输入封面顺序一一对应。
+const ARTIST_JUDGE_MODEL = process.env.ARTIST_JUDGE_MODEL || GEMINI_MODEL; // 可换更快模型
+const ARTIST_JUDGE_TIMEOUT = Number(process.env.ARTIST_JUDGE_TIMEOUT) || 60000; // 短超时配合重试
+const ARTIST_JUDGE_PROMPT = `你是画师星探。给你的是某个社交账号主页最近若干篇笔记的封面图（按给出顺序编号 0,1,2...），请整体判断这个账号是不是「画师/插画创作者」账号，并给每张封面打质量分。
+只输出 JSON，格式：{"is_artist":true/false,"art_ratio":0.0~1.0,"style":"...","reason":"...","qualities":[7,5,8,...]}
 判定规则：
 - is_artist=true：主页以本人原创的绘画/插画/漫画/角色设计/同人图/概念设计为主（占比过半即可，允许夹杂线稿、过程图、少量杂图）。
 - is_artist=false：主页以下列内容为主——穿搭/美食/旅游/健身/自拍/日常vlog/摄影写真/cosplay实拍/手办周边/影视综艺/搬运转发他人作品/纯文字/商品带货/教程课程。
 - art_ratio：这些封面里「原创绘画作品」所占的大致比例（0~1）。
 - style：用一句话概括这个画师的大致画风（如"日系厚涂人物"、"古风水墨"、"欧美卡通"、"Q版头像"），不限词表，自由概括；非画师则留空字符串。
 - reason：一句话中文说明依据（如"主页多为原创古风人物插画"或"主页以穿搭自拍为主，非画师"）。
+- qualities：数组，长度与输入封面数量一致，第 i 个元素是第 i 张封面作为「画师代表作展示质量」的评分(0-10)：0-2 非绘画/广告/截图/AI图，3-4 草稿线稿，5-6 普通插画，7-8 精美，9-10 大师级。务必按输入顺序对应，不可遗漏。
 判断要点：看整体构成，不是看单张好坏。宁可对"疑似画师但夹杂杂图"判 true，也就是占比过半即算画师。
 不要输出任何解释性文字、不要用 markdown 代码块包裹。`;
 
-export type ArtistJudgeResult = { isArtist: boolean; artRatio: number; style: string; reason: string; error: string | null; skipped: boolean };
+export type ArtistJudgeResult = { isArtist: boolean; artRatio: number; style: string; reason: string; qualities: number[]; error: string | null; skipped: boolean };
 
 export async function judgeArtistAccount(covers: { b64: string; mime: string }[]): Promise<ArtistJudgeResult> {
   // 无 key / 无封面 = 结构性缺配：中性放行标 skipped，宁可留给人工筛也不漏画师。
   if (!isAiConfigured() || !covers.length) {
-    return { isArtist: true, artRatio: 0.5, style: '', reason: '', error: isAiConfigured() ? '无封面' : 'AI_API_KEY 未配置', skipped: true };
+    return { isArtist: true, artRatio: 0.5, style: '', reason: '', qualities: [], error: isAiConfigured() ? '无封面' : 'AI_API_KEY 未配置', skipped: true };
   }
+  // 超时/限流重试 1 次：偶发抖动不该让画师被中性放行混入或丢失
+  const callOnce = async () => callGeminiMulti(covers, ARTIST_JUDGE_PROMPT, { model: ARTIST_JUDGE_MODEL, timeoutMs: ARTIST_JUDGE_TIMEOUT });
+  const t0 = Date.now();
+  let raw: string | null = null;
   try {
-    const raw = await callGeminiMulti(covers, ARTIST_JUDGE_PROMPT);
+    raw = await callOnce();
+    if (raw == null) throw new Error('空响应');
+  } catch (e1: any) {
+    console.warn(`[ai] 判画师首试失败(${e1.message})，1.5s 后重试…`);
+    await new Promise(r => setTimeout(r, 1500));
+    raw = await callOnce(); // 重试再失败则抛出，进下面的 catch 中性放行
+  }
+  console.log(`[ai] 判画师 ${covers.length} 张封面耗时 ${(Date.now() - t0) / 1000}s`);
+  try {
     const parsed = extractJson(raw);
     if (!parsed) throw new Error('画师判定输出无法解析');
     const artRatio = Math.max(0, Math.min(1, Number(parsed.art_ratio) || 0));
+    const qualities = Array.isArray(parsed.qualities)
+      ? parsed.qualities.map((q: any) => Math.max(0, Math.min(10, Number(q) || 0)))
+      : [];
     return {
       isArtist: parsed.is_artist === true,
       artRatio,
       style: String(parsed.style || ''),
       reason: String(parsed.reason || ''),
+      qualities,
       error: null,
       skipped: false,
     };
   } catch (e) {
-    // 运行时偶发故障（超时/限流）：中性放行不漏画师，标 skipped 供上层区分
-    return { isArtist: true, artRatio: 0.5, style: '', reason: '', error: (e as Error).message, skipped: true };
+    // 运行时偶发故障（重试仍失败）：中性放行不漏画师，标 skipped 供上层区分
+    return { isArtist: true, artRatio: 0.5, style: '', reason: '', qualities: [], error: (e as Error).message, skipped: true };
   }
 }
