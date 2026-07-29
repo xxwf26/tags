@@ -64,7 +64,7 @@ export function SearchPage() {
   // 进度/运行态从轮询到的 session 派生（取代旧的本地 searching/progress state + 手写 setInterval）
   const activeData = sessions.find(s => s.id === activeSession);
   const running = activeData?.status === 'running';
-  const progress: { stage?: string; total?: number; processed?: number; kwDone?: number; kwTotal?: number; authorsFound?: number; artists?: number; startTime: string } | null = (activeData?.searchTags as any)?.progress ?? null;
+  const progress: { stage?: string; total?: number; processed?: number; kwDone?: number; kwTotal?: number; authorsFound?: number; artists?: number; aggAuthors?: number; droppedByCap?: number; startTime: string } | null = (activeData?.searchTags as any)?.progress ?? null;
   const busy = running || startSearchM.isPending;
   // 分阶段进度文案：召回(搜帖子)→甄别(判画师)。召回是最慢阶段，必须给反馈不能干等。
   const progressLabel = (() => {
@@ -398,8 +398,9 @@ export function SearchPage() {
                 )}
                 {!running && activeData && (activeData.searchTags as any)?.tags?.length > 0 && (
                   <button onClick={doContinueSearch} disabled={startSearchM.isPending}
+                    title="用同样的标签接着往下反查「本次因数量上限没查到的候选作者」，结果追加到当前这次搜索里（不新建记录、已查过的作者自动跳过）。适合还有较多未反查作者、想再多挖一批画师时用。"
                     className="text-[12px] bg-violet-600 text-white rounded-full px-3 py-1.5 font-medium disabled:opacity-40">
-                    {startSearchM.isPending ? '发起中…' : '🔍 继续搜索更多'}
+                    {startSearchM.isPending ? '发起中…' : `🔍 继续搜索更多${(progress?.droppedByCap ?? 0) > 0 ? `（还有 ${progress!.droppedByCap} 位未查）` : ''}`}
                   </button>
                 )}
                 {(refsQ.data ?? []).length > 1 && (
@@ -407,6 +408,15 @@ export function SearchPage() {
                     className="text-[12px] text-stone-500 border border-stone-200 rounded-full px-3 py-1.5 hover:bg-stone-50">📎 从其他参考图导入标签</button>
                 )}
               </div>
+              {/* 继续搜索含义提示：常驻小字，不用 hover 也能看懂 */}
+              {!running && activeData && (activeData.searchTags as any)?.tags?.length > 0 && (
+                <div className="text-[11px] text-stone-400 mt-1.5">
+                  💡「继续搜索更多」= 用相同标签接着反查本次没查完的候选作者，结果追加到这次搜索（不新建记录、已查过的自动跳过）。
+                  {(progress?.droppedByCap ?? 0) > 0
+                    ? <span className="text-amber-600">本次还有 {progress!.droppedByCap} 位候选作者未反查，可继续挖。</span>
+                    : <span>本次候选已基本查完，继续搜索新增有限。</span>}
+                </div>
+              )}
               {showMerge && (
                 <div className="flex gap-2 mt-2 flex-wrap items-center">
                   <span className="text-[11px] text-stone-400">选择要导入标签的参考图（合并到当前）：</span>
@@ -476,7 +486,15 @@ export function SearchPage() {
       {activeSession && artistGroups.length > 0 && (
         <div>
           <div className="flex items-center justify-between mb-2 px-1 gap-2 flex-wrap">
-            <div className="text-[13px] text-stone-500">找到 <span className="text-xhs font-medium">{artistGroups.length}</span> 位画师（共 {results.length} 张代表作）{filterText.trim() && <span className="text-stone-400">· 筛选后 {shownGroups.length}</span>}</div>
+            <div className="text-[13px] text-stone-500">
+              找到 <span className="text-xhs font-medium">{artistGroups.length}</span> 位画师（共 {results.length} 张代表作）{filterText.trim() && <span className="text-stone-400">· 筛选后 {shownGroups.length}</span>}
+              {(progress?.aggAuthors ?? 0) > 0 && (
+                <span className="text-stone-400">
+                  {' '}· 本次共聚合 {progress!.aggAuthors} 位候选作者、反查 {progress!.total ?? 0} 位
+                  {(progress?.droppedByCap ?? 0) > 0 && <span className="text-amber-600">，还有 {progress!.droppedByCap} 位未反查</span>}
+                </span>
+              )}
+            </div>
             {/* 排序/筛选（item 1） */}
             <div className="flex items-center gap-1.5 text-[11px]">
               <input value={filterText} onChange={e => setFilterText(e.target.value)} placeholder="筛选画师名/画风…" className="w-36 text-[11px] border border-stone-200 rounded-full px-2.5 py-1" />

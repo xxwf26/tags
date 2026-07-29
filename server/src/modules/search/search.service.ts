@@ -174,6 +174,8 @@ export class SearchService {
     }
 
     let totalResults = existingInSession.length, newResults = 0, keptArtists = 0;
+    // 聚合作者总数 / 因超 ARTIST_CAP 未反查的作者数（透出到前端，让用户知道还有多少候选没查，可点"继续搜索"）
+    let aggAuthors = 0, droppedByCap = 0;
 
     // 微博：新流程（作者主页反查画师）不支持，若选了给出提示
     if (platforms.includes('weibo')) console.log('[search] 微博暂不支持"作者中心找画师"流程，已跳过');
@@ -220,11 +222,12 @@ export class SearchService {
       const scoreOf = (a: Agg) => a.hitCount + (a.fromCommission ? 1 : 0);
       const allAuthors = [...authorMap.values()].sort((a, b) => scoreOf(b) - scoreOf(a));
       const authors = allAuthors.slice(0, ARTIST_CAP);
-      const droppedByCap = allAuthors.length - authors.length;
+      aggAuthors = allAuthors.length;
+      droppedByCap = allAuthors.length - authors.length;
       const commissionCount = authors.filter(a => a.fromCommission).length;
       progressTotal += authors.length;
       console.log(`[search] 聚合得 ${allAuthors.length} 个作者（无id丢 ${dropNoId}，路人词丢 ${dropText}），反查前 ${authors.length} 个（其中约稿词 ${commissionCount}）${droppedByCap ? `（超上限丢 ${droppedByCap}）` : ''}`);
-      await db.update(schema.searchSessions).set({ searchTags: buildTags({ stage: 'judge', total: progressTotal, processed: 0, startTime: new Date(progressStart).toISOString() }) }).where(eq(schema.searchSessions.id, sessionId));
+      await db.update(schema.searchSessions).set({ searchTags: buildTags({ stage: 'judge', total: progressTotal, processed: 0, aggAuthors, droppedByCap, startTime: new Date(progressStart).toISOString() }) }).where(eq(schema.searchSessions.id, sessionId));
 
       let fileSeq = totalResults; // 作品图文件名序号（continue 时从已有数接续，避免覆盖）
       let dropNotArtist = 0, profileFail = 0, skipNoCover = 0;
@@ -320,7 +323,7 @@ export class SearchService {
       for (let i = 0; i < authors.length; i += ARTIST_CONCURRENCY) {
         if (isAborted()) break;
         await Promise.all(authors.slice(i, i + ARTIST_CONCURRENCY).map(processAuthor));
-        await db.update(schema.searchSessions).set({ resultCount: totalResults, newCount: newResults, searchTags: buildTags({ stage: 'judge', total: progressTotal, processed: progressProcessed, artists: keptArtists, startTime: new Date(progressStart).toISOString() }) }).where(eq(schema.searchSessions.id, sessionId));
+        await db.update(schema.searchSessions).set({ resultCount: totalResults, newCount: newResults, searchTags: buildTags({ stage: 'judge', total: progressTotal, processed: progressProcessed, artists: keptArtists, aggAuthors, droppedByCap, startTime: new Date(progressStart).toISOString() }) }).where(eq(schema.searchSessions.id, sessionId));
         console.log(`[search] 进度: ${progressProcessed}/${progressTotal} 作者，画师 ${keptArtists}（路人 ${dropNotArtist}，主页失败 ${profileFail}，无封面 ${skipNoCover}）`);
       }
       console.log(`[search] 小红书完成: 画师 ${keptArtists} 人 / ${totalResults} 作品（路人 ${dropNotArtist}，主页失败 ${profileFail}，无封面 ${skipNoCover}）`);
@@ -330,7 +333,7 @@ export class SearchService {
     const elapsed = Date.now() - progressStart;
     await db.update(schema.searchSessions).set({
       status: 'ok', resultCount: totalResults, newCount: newResults,
-      searchTags: buildTags({ total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString(), elapsedMs: elapsed, artists: keptArtists }),
+      searchTags: buildTags({ total: progressTotal, processed: progressProcessed, startTime: new Date(progressStart).toISOString(), elapsedMs: elapsed, artists: keptArtists, aggAuthors, droppedByCap }),
     }).where(eq(schema.searchSessions.id, sessionId));
     await logOperation({ type: 'search_start', targetType: 'reference', targetId: body.referenceId, summary: `寻源搜索 #${sessionId}：${keptArtists} 位画师 / ${totalResults} 作品（${newResults} 新增）` });
     return { sessionId, resultCount: totalResults, newCount: newResults, artists: keptArtists };
