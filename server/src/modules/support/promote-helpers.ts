@@ -65,10 +65,30 @@ export async function findOrCreateArtist(
   }
 }
 
+// 用寻源抽到的联系方式/档期/简介补全画师——只填空字段，不覆盖人工已编辑的数据。
+// contact：现有 contact 为空才写；commission：现值 unknown/空才写；bio/engageNote：为空才写。
+export async function enrichArtistContact(
+  artistId: number,
+  meta: { contact?: { wechat?: string; qq?: string; email?: string } | null; commission?: string | null; bio?: string | null; scheduleNote?: string | null },
+): Promise<void> {
+  const [a] = await db.select({
+    contact: schema.artists.contact, commission: schema.artists.commission,
+    bio: schema.artists.bio, engageNote: schema.artists.engageNote,
+  }).from(schema.artists).where(eq(schema.artists.id, artistId)).limit(1);
+  if (!a) return;
+  const patch: any = {};
+  const curContact = a.contact as Record<string, string> | null;
+  if ((!curContact || !Object.keys(curContact).length) && meta.contact && Object.keys(meta.contact).length) patch.contact = meta.contact;
+  if ((!a.commission || a.commission === 'unknown') && meta.commission && meta.commission !== 'unknown') patch.commission = meta.commission;
+  if (!a.bio && meta.bio) patch.bio = meta.bio;
+  if (!a.engageNote && meta.scheduleNote) patch.engageNote = meta.scheduleNote;
+  if (Object.keys(patch).length) await db.update(schema.artists).set(patch).where(eq(schema.artists.id, artistId));
+}
+
 // tier2 → promoted：下载图 → 库内去重 → 建作品 → 建/找画师 → 标记结果 → 记日志。
 // filePrefix 区分文件名前缀与默认 sourcePlatform；logType 区分审计日志类型。
 export async function promoteSearchResult(
-  result: { id: number; imageUrl: string | null; title: string | null; author: string | null; platform: string | null; sourceUrl: string | null; authorUrl?: string | null },
+  result: { id: number; imageUrl: string | null; title: string | null; author: string | null; platform: string | null; sourceUrl: string | null; authorUrl?: string | null; aiTags?: any },
   opts: { filePrefix: string; logType: string },
 ): Promise<{ id: number; tier: 'promoted'; artworkId: number; artistId: number | null; duplicate?: boolean }> {
   if (!result.imageUrl) throw new Error('结果无图片URL');
@@ -102,6 +122,13 @@ export async function promoteSearchResult(
   // 画师建联链接优先用 authorUrl（画师主页），寻源结果的 sourceUrl 是图片直链，建联点回去无意义。
   const artistLink = result.authorUrl || result.sourceUrl;
   const artistId = await findOrCreateArtist(result.author, result.platform, artistLink);
+  // 寻源抽到的联系方式/档期/简介补进画师（只填空字段）。aiTags[0] 存的是画师级信息。
+  if (artistId) {
+    const meta = (result.aiTags as any[])?.[0];
+    if (meta && (meta.contact || meta.commission || meta.bio || meta.scheduleNote)) {
+      await enrichArtistContact(artistId, { contact: meta.contact, commission: meta.commission, bio: meta.bio, scheduleNote: meta.scheduleNote });
+    }
+  }
   const [aw] = await db.insert(schema.artworks).values({
     artistId,
     title: result.title || null,

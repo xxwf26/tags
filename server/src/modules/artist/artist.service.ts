@@ -64,10 +64,12 @@ export class ArtistService {
     return { ...a, total: dist.total, styleDist: dist.styles, missingStyles: dist.missing };
   }
 
-  async updateEngage(id: number, body: { engageStatus?: string; engageNote?: string }) {
+  async updateEngage(id: number, body: { engageStatus?: string; engageNote?: string; contact?: { wechat?: string; qq?: string; email?: string } | null; commission?: string }) {
     const patch: any = {};
     if (body.engageStatus) patch.engageStatus = body.engageStatus;
     if (body.engageNote !== undefined) patch.engageNote = body.engageNote;
+    if (body.contact !== undefined) patch.contact = body.contact;
+    if (body.commission) patch.commission = body.commission;
     await db.update(schema.artists).set(patch).where(eq(schema.artists.id, id));
     await logOperation({ type: 'artist_engage', targetType: 'artist', targetId: id, summary: `更新建联状态：${body.engageStatus || ''}` });
     return this.getOne(id);

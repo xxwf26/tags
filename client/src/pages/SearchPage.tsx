@@ -5,6 +5,8 @@ import { tagsByTopDim, proxyImg } from '../api';
 const BASE = '/api';
 const SEARCH_REF_KEY = 'search:ref';
 const SEARCH_SESSION_KEY = 'search:session';
+const SEARCH_HISTORY_EXPANDED_KEY = 'search:historyExpanded';
+const HISTORY_COLLAPSED_COUNT = 3;   // 收起时默认展示的最近搜索条数
 
 const TIER_LABEL: Record<string, { label: string; cls: string }> = {
   tier1: { label: '一级库', cls: 'text-stone-500 bg-stone-100' },
@@ -48,6 +50,9 @@ export function SearchPage() {
   });
   const [viewResult, setViewResult] = useState<any>(null);
   const [viewImgIdx, setViewImgIdx] = useState(0);
+  // 搜索历史折叠：默认收起（只显示最近几条），状态持久化
+  const [historyExpanded, setHistoryExpanded] = useState(() => localStorage.getItem(SEARCH_HISTORY_EXPANDED_KEY) === '1');
+  useEffect(() => { localStorage.setItem(SEARCH_HISTORY_EXPANDED_KEY, historyExpanded ? '1' : '0'); }, [historyExpanded]);
 
   // 同步到 localStorage（切页恢复用）
   useEffect(() => {
@@ -432,11 +437,27 @@ export function SearchPage() {
         </div>
       )}
 
-      {/* 搜索历史（session 文件夹，区分管理）。无图会话 referenceId 传 0。 */}
-      {sessions.length > 0 && (
+      {/* 搜索历史（session 文件夹，区分管理）。无图会话 referenceId 传 0。可折叠：默认只显示最近几条。 */}
+      {sessions.length > 0 && (() => {
+        const canCollapse = sessions.length > HISTORY_COLLAPSED_COUNT;
+        // 收起时只展示最近 N 条；若当前查看的 session 不在其中，也把它带上（否则看不到自己在看哪次）
+        let shown = sessions;
+        if (canCollapse && !historyExpanded) {
+          shown = sessions.slice(0, HISTORY_COLLAPSED_COUNT);
+          if (activeSession && !shown.some(s => s.id === activeSession)) {
+            const act = sessions.find(s => s.id === activeSession);
+            if (act) shown = [...shown, act];
+          }
+        }
+        const hiddenCount = sessions.length - shown.length;
+        return (
         <div className="bg-white rounded-2xl p-4 border border-stone-100 mb-3">
           <div className="flex items-center justify-between mb-2">
-            <h3 className="font-semibold text-stone-700 text-[14px]">搜索历史（{sessions.length} 次，不覆盖）</h3>
+            <button onClick={() => canCollapse && setHistoryExpanded(v => !v)}
+              className={`flex items-center gap-1.5 ${canCollapse ? 'cursor-pointer hover:text-xhs' : 'cursor-default'}`}>
+              {canCollapse && <span className="text-stone-400 text-[11px] transition-transform">{historyExpanded ? '▾' : '▸'}</span>}
+              <h3 className="font-semibold text-stone-700 text-[14px]">搜索历史（{sessions.length} 次，不覆盖）</h3>
+            </button>
             <div className="flex items-center gap-2">
               <span className="text-[11px] text-stone-400">每次搜索独立保留，标新增</span>
               <button onClick={() => { if (confirm('清空所有搜索历史及其结果？')) { fetch(BASE + '/search/sessions-all?referenceId=' + (selectedRef ?? 0), { method: 'DELETE' }).then(() => { refetchSessions(); setActiveSession(null); }); } }}
@@ -444,7 +465,8 @@ export function SearchPage() {
             </div>
           </div>
           <div className="space-y-2">
-            {sessions.map((s, i) => {
+            {shown.map((s) => {
+              const i = sessions.findIndex(x => x.id === s.id);   // 全量列表里的真实序号，保证编号正确
               const rawTags = (s.searchTags as any)?.tags ?? s.searchTags ?? [];
               const sessionName = (s.searchTags as any)?.name;
               // 兼容两种历史结构：寻源写 [{label,mode,...}]，发现写 ["日系",...]（同表 source 混存的遗留）
@@ -477,8 +499,15 @@ export function SearchPage() {
               );
             })}
           </div>
+          {canCollapse && (
+            <button onClick={() => setHistoryExpanded(v => !v)}
+              className="w-full mt-2 text-[12px] text-stone-500 hover:text-xhs py-1.5 rounded-lg hover:bg-stone-50 transition-colors">
+              {historyExpanded ? '收起 ▴' : `展开全部 ${sessions.length} 次${hiddenCount > 0 ? `（还有 ${hiddenCount} 次）` : ''} ▾`}
+            </button>
+          )}
         </div>
-      )}
+        );
+      })()}
 
       {/* 搜索结果：按画师聚合（寻源目标是找画师建联，不是攒作品） */}
       {activeSession && artistGroups.length > 0 && (
@@ -537,6 +566,22 @@ export function SearchPage() {
                     return <span className="ml-auto text-[11px] text-emerald-600">✓ 已入库</span>;
                   })()}
                 </div>
+                {(() => {
+                  const COMM: Record<string, string> = { open: '🟢 可约', full: '🔴 档期满', commercial_only: '💼 仅商稿' };
+                  const c = g.contact || {};
+                  const hasContact = c.wechat || c.qq || c.email;
+                  const commLabel = g.commission && g.commission !== 'unknown' ? COMM[g.commission] : null;
+                  if (!hasContact && !commLabel && !g.bio) return null;
+                  return (
+                    <div className="flex items-center gap-2 flex-wrap mb-2 text-[11px]">
+                      {commLabel && <span className="px-1.5 py-0.5 rounded-full bg-stone-100 text-stone-600">{commLabel}</span>}
+                      {c.wechat && <span className="px-1.5 py-0.5 rounded-full bg-green-50 text-green-700" title="微信">微信 {c.wechat}</span>}
+                      {c.qq && <span className="px-1.5 py-0.5 rounded-full bg-sky-50 text-sky-700" title="QQ">QQ {c.qq}</span>}
+                      {c.email && <span className="px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700" title="邮箱">✉ {c.email}</span>}
+                      {g.bio && <span className="text-stone-400 truncate max-w-[420px]" title={g.bio}>简介：{g.bio}</span>}
+                    </div>
+                  );
+                })()}
                 <div className="flex gap-2 overflow-x-auto pb-1">
                   {g.results.map(r => (
                     <div key={r.id} className="relative shrink-0 cursor-pointer" onClick={() => { setViewResult(r); const cover = r.imageUrl || ''; const list: string[] = (r as any).allImages?.length ? (r as any).allImages : (cover ? [cover] : []); const idx = list.indexOf(cover); setViewImgIdx(idx >= 0 ? idx : 0); }}>

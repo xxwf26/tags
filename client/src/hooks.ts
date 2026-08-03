@@ -18,7 +18,7 @@ export function useArtist(id?: number) {
 }
 export function useUpdateEngage(id: number) {
   const qc = useQueryClient();
-  return useMutation<Artist, Error, { engageStatus?: string; engageNote?: string }>({
+  return useMutation<Artist, Error, { engageStatus?: string; engageNote?: string; contact?: { wechat?: string; qq?: string; email?: string } | null; commission?: string }>({
     mutationFn: (body) => updateEngage(id, body),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['artist', id] }); qc.invalidateQueries({ queryKey: ['artists'] }); },
   });

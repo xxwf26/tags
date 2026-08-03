@@ -21,7 +21,7 @@ export class ArtistController {
   }
 
   @Patch(':id/engage')
-  updateEngage(@Param('id', ParseIntPipe) id: number, @Body() body: { engageStatus?: string; engageNote?: string }) {
+  updateEngage(@Param('id', ParseIntPipe) id: number, @Body() body: { engageStatus?: string; engageNote?: string; contact?: { wechat?: string; qq?: string; email?: string } | null; commission?: string }) {
     return this.artistService.updateEngage(id, body);
   }
 

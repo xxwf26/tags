@@ -119,6 +119,23 @@ export async function callGemini(b64: string, mime: string, prompt: string): Pro
   return parts.filter((p: any) => p.thought !== true).map((p: any) => p.text || '').join('').trim() || null;
 }
 
+// 纯文本调用（无图）：抽取简介里的联系方式/档期用。复用 callGemini 的 fetch 模式。
+export async function callGeminiText(prompt: string, userText: string): Promise<string | null> {
+  const body = {
+    systemInstruction: { parts: [{ text: prompt }] },
+    contents: [{ role: 'user', parts: [{ text: userText }] }],
+    generationConfig: { temperature: 0, maxOutputTokens: 512, responseMimeType: 'application/json' },
+  };
+  const res = await fetch(`${AI_BASE}/gemini/v1beta/models/${GEMINI_MODEL}:generateContent`, {
+    method: 'POST', headers: { Authorization: `Bearer ${AI_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body), signal: AbortSignal.timeout(30000),
+  });
+  const json: any = await res.json();
+  if (json.error) throw new Error(`gemini: ${json.error.message}`);
+  const parts = json.candidates?.[0]?.content?.parts || [];
+  return parts.filter((p: any) => p.thought !== true).map((p: any) => p.text || '').join('').trim() || null;
+}
+
 // 多图一次调用：把多张图放进同一个 user turn，适合"给整组图做一个整体判断"（如判画师主页画风构成）
 // model/timeoutMs 可选：判画师号可用更快模型 + 更短超时配合重试。
 export async function callGeminiMulti(imgs: { b64: string; mime: string }[], prompt: string, opts?: { model?: string; timeoutMs?: number }): Promise<string | null> {

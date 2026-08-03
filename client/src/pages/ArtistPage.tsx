@@ -67,6 +67,10 @@ export function ArtistPage() {
   const [editing, setEditing] = useState(false);
   const [editStatus, setEditStatus] = useState('');
   const [editNote, setEditNote] = useState('');
+  const [editWechat, setEditWechat] = useState('');
+  const [editQq, setEditQq] = useState('');
+  const [editEmail, setEditEmail] = useState('');
+  const [editCommission, setEditCommission] = useState('');
   const [adding, setAdding] = useState(false);
 
   if (artistQ.isLoading) return <div className="text-center text-stone-400 py-16">加载中…</div>;
@@ -77,8 +81,19 @@ export function ArtistPage() {
   const habit = a.drawingHabit || {};
   const styleHint: string[] = a.styleHint ?? [];
   const links = (a.links || {}) as Record<string, string[]>;
-  const openEdit = () => { setEditStatus(a.engageStatus); setEditNote(a.engageNote || ''); setEditing(true); };
-  const saveEdit = () => engageM.mutate({ engageStatus: editStatus, engageNote: editNote }, { onSuccess: () => setEditing(false) });
+  const openEdit = () => {
+    setEditStatus(a.engageStatus); setEditNote(a.engageNote || '');
+    setEditWechat(a.contact?.wechat || ''); setEditQq(a.contact?.qq || ''); setEditEmail(a.contact?.email || '');
+    setEditCommission(a.commission || 'unknown');
+    setEditing(true);
+  };
+  const saveEdit = () => {
+    const contact: { wechat?: string; qq?: string; email?: string } = {};
+    if (editWechat.trim()) contact.wechat = editWechat.trim();
+    if (editQq.trim()) contact.qq = editQq.trim();
+    if (editEmail.trim()) contact.email = editEmail.trim();
+    engageM.mutate({ engageStatus: editStatus, engageNote: editNote, contact, commission: editCommission }, { onSuccess: () => setEditing(false) });
+  };
 
   return (
     <div className="max-w-[1600px] mx-auto px-3 md:px-6 py-3">
@@ -94,6 +109,13 @@ export function ArtistPage() {
               <button onClick={openEdit} className="text-[11px] text-stone-400 border border-stone-200 rounded-full px-2 py-0.5 hover:border-xhs hover:text-xhs">编辑建联</button>
             </div>
             {a.bio && <div className="text-[13px] text-stone-500 mt-0.5">{a.bio}</div>}
+            {a.contact && (a.contact.wechat || a.contact.qq || a.contact.email) && (
+              <div className="flex gap-2 flex-wrap mt-2 items-center">
+                {a.contact.wechat && <span className="text-[11px] text-green-700 bg-green-50 px-2 py-0.5 rounded-full cursor-pointer" title="点击复制微信" onClick={() => navigator.clipboard?.writeText(a.contact!.wechat!)}>微信 {a.contact.wechat}</span>}
+                {a.contact.qq && <span className="text-[11px] text-sky-700 bg-sky-50 px-2 py-0.5 rounded-full cursor-pointer" title="点击复制QQ" onClick={() => navigator.clipboard?.writeText(a.contact!.qq!)}>QQ {a.contact.qq}</span>}
+                {a.contact.email && <span className="text-[11px] text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-full cursor-pointer" title="点击复制邮箱" onClick={() => navigator.clipboard?.writeText(a.contact!.email!)}>✉ {a.contact.email}</span>}
+              </div>
+            )}
             {styleHint.length > 0 && (
               <div className="flex gap-1 flex-wrap mt-2 items-center">
                 {styleHint.map(s => <span key={s} className="text-[11px] text-xhs bg-xhs-soft px-2 py-0.5 rounded-full">{s}</span>)}
@@ -142,6 +164,23 @@ export function ArtistPage() {
             <label className="text-xs text-stone-400">备注</label>
             <textarea value={editNote} onChange={e => setEditNote(e.target.value)} rows={3}
               className="w-full mt-1 border border-stone-200 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:border-stone-400" placeholder="档期 / 合作记录 / 采编评价…" />
+            <label className="text-xs text-stone-400 block mt-3">约稿档期</label>
+            <select value={editCommission} onChange={e => setEditCommission(e.target.value)}
+              className="w-full mt-1 border border-stone-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-stone-400">
+              <option value="unknown">未知</option>
+              <option value="open">可约</option>
+              <option value="full">档期满</option>
+              <option value="commercial_only">仅商稿</option>
+            </select>
+            <label className="text-xs text-stone-400 block mt-3">联系方式</label>
+            <div className="grid grid-cols-1 gap-1.5 mt-1">
+              <input value={editWechat} onChange={e => setEditWechat(e.target.value)} placeholder="微信"
+                className="border border-stone-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-stone-400" />
+              <input value={editQq} onChange={e => setEditQq(e.target.value)} placeholder="QQ"
+                className="border border-stone-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-stone-400" />
+              <input value={editEmail} onChange={e => setEditEmail(e.target.value)} placeholder="邮箱"
+                className="border border-stone-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-stone-400" />
+            </div>
             <div className="flex justify-end gap-2 mt-4">
               <button onClick={() => setEditing(false)} className="px-4 py-2 rounded-full text-stone-500 text-sm">取消</button>
               <button onClick={saveEdit} disabled={engageM.isPending} className="px-5 py-2 rounded-full bg-xhs text-white text-sm font-medium disabled:opacity-50">{engageM.isPending ? '保存中…' : '保存'}</button>

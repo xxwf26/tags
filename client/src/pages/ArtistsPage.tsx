@@ -73,6 +73,12 @@ function ArtistCard({ a }: { a: Artist }) {
       <div className="p-3">
         <div className="flex items-center gap-2">
           <span className="font-semibold text-stone-800 text-[14px] truncate flex-1">{a.name}</span>
+          {a.contact && (a.contact.wechat || a.contact.qq || a.contact.email) && (
+            <span className="text-[10px] shrink-0" title={[a.contact.wechat && `微信 ${a.contact.wechat}`, a.contact.qq && `QQ ${a.contact.qq}`, a.contact.email && `邮箱 ${a.contact.email}`].filter(Boolean).join('\n')}>📱</span>
+          )}
+          {a.commission && a.commission !== 'unknown' && (
+            <span className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${a.commission === 'open' ? 'bg-green-50 text-green-700' : a.commission === 'full' ? 'bg-rose-50 text-rose-600' : 'bg-amber-50 text-amber-700'}`}>{a.commission === 'open' ? '可约' : a.commission === 'full' ? '档期满' : '仅商稿'}</span>
+          )}
           <span className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${ENGAGE_CLS[a.engageStatus] || 'text-stone-500 bg-stone-100'}`}>{ENGAGE[a.engageStatus] || a.engageStatus}</span>
         </div>
         {styles.length > 0 && (

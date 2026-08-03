@@ -137,11 +137,19 @@ function parseProfile(html: string) {
       url: best?.url ? String(best.url).replace(/^http:\/\//, 'https://') : null,
     };
   }).filter((x: any) => x.url);
-  return { nickname: user.userPageData?.basicInfo?.nickname || user.userInfo?.nickname || '', items };
+  const basic = user.userPageData?.basicInfo || user.userInfo || {};
+  return {
+    nickname: basic.nickname || '',
+    desc: basic.desc || '',          // 简介：画师常在此写微信/QQ/约稿档期
+    redId: basic.redId || '',        // 小红书号
+    items,
+  };
 }
 
-// 抓画师主页作品列表（封面图）。profileUrl 形如 https://www.xiaohongshu.com/user/profile/{id}
-export async function fetchProfileNotes(profileUrl: string) {
+export type ProfileInfo = { nickname: string; desc: string; redId: string; items: any[] };
+
+// 抓画师主页作品列表（封面图）+ 简介。profileUrl 形如 https://www.xiaohongshu.com/user/profile/{id}
+export async function fetchProfileNotes(profileUrl: string): Promise<ProfileInfo> {
   const { status, body } = await get(profileUrl);
   const profile = parseProfile(body);
   if (!profile) throw new Error(`主页解析失败 (status ${status})，可能链接过期或页面结构变化`);

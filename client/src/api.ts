@@ -12,8 +12,10 @@ export type Artwork = {
   tagStatus: 'pending' | 'confirmed'; aiTagged: number; tagConfidence: number | null;
 };
 export type StyleDistItem = { style: string; count: number; h: number; v: number; both: boolean; missingOrient: string | null };
+export type Contact = { wechat?: string; qq?: string; email?: string };
 export type Artist = {
   id: number; name: string; bio: string | null; engageStatus: string; commission: string;
+  contact?: Contact | null;
   links: any; drawingHabit: any; engageNote?: string | null; styleHint?: string[] | null;
   total: number; styleDist?: StyleDistItem[]; styleCount?: number; topStyle?: string | null; missingStyles?: string[];
   coverThumbs?: string[];
@@ -61,7 +63,7 @@ export async function fetchArtist(id: number): Promise<Artist> {
   if (!r.ok) throw new Error('artist failed');
   return r.json();
 }
-export async function updateEngage(id: number, body: { engageStatus?: string; engageNote?: string }): Promise<Artist> {
+export async function updateEngage(id: number, body: { engageStatus?: string; engageNote?: string; contact?: Contact | null; commission?: string }): Promise<Artist> {
   const r = await fetch(BASE + '/artists/' + id + '/engage', {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   });
@@ -193,6 +195,7 @@ export type SearchArtistGroup = {
   author: string | null; authorUrl: string | null; platform: string | null;
   count: number; artRatio: number | null; style?: string; styleTags: string[]; results: SearchResult[];
   alreadyInLibrary?: boolean;
+  bio?: string; redId?: string; contact?: Contact | null; commission?: string; scheduleNote?: string | null;
 };
 export async function uploadReference(file: File): Promise<ReferenceImage> {
   const fd = new FormData(); fd.append('file', file);

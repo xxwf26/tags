@@ -10,6 +10,7 @@ import { fetchMihuashiArtworkAuthor, extractMihuashiArtworkId } from '../crawl/m
 import { aHash, hexToNibbles, hammingNib, DEDUP_THRESHOLD } from '../imghash/imghash.js';
 import { logOperation } from '../operation/op.js';
 import { judgeArtistAccount, isAiConfigured } from '../tagging/ai.js';
+import { extractFromBio } from '../tagging/contact-extract.js';
 import { embedImage, isEmbedAvailable } from '../embed/clip.js';
 import { SettingsService } from '../settings/settings.service.js';
 import { promoteSearchResult } from '../support/promote-helpers.js';
@@ -248,6 +249,11 @@ export class SearchService {
         if (!judgeCovers.length) { skipNoCover++; return; }
         const judge = await judgeArtistAccount(judgeCovers);
         if (!judge.isArtist) { dropNotArtist++; console.log(`[search] 丢弃路人 ${profile.nickname || a.nickname}: ${judge.reason}`); return; }
+        // 从主页简介抽联系方式/约稿档期（正则+关键词优先，AI兜底）。画师级信息，各代表作行共享。
+        const bio = profile.desc || '';
+        const { contact, commission, scheduleNote } = await extractFromBio(bio);
+        const artistMeta = { isArtist: true, artRatio: judge.artRatio, style: judge.style, reason: judge.reason,
+          bio, redId: profile.redId || '', contact, commission, scheduleNote };
         // qualities[i] 对应 judgeCovers[i] → items[judgeIdx[i]]；取某 item 的质量分
         const qualityOf = (itemIdx: number): number | null => {
           const j = judgeIdx.indexOf(itemIdx);
@@ -284,7 +290,7 @@ export class SearchService {
               sourceUrl: items[i].url,
               imageUrl: localUrl,
               allImages: [localUrl], // 先占位，循环结束后统一回填该画师全部本地URL
-              aiTags: [{ isArtist: true, artRatio: judge.artRatio, style: judge.style, reason: judge.reason }] as any,
+              aiTags: [artistMeta] as any,
               imageHash: imageHash || null,
               similarity: null,
               quality: qualityOf(i), // AI 给的代表作质量分，用于排序（item 2）
@@ -426,21 +432,27 @@ export class SearchService {
       author: string | null; authorUrl: string | null; platform: string | null;
       count: number; artRatio: number | null; style: string; styleTags: string[]; results: any[];
       alreadyInLibrary: boolean;
+      bio: string; redId: string; contact: any; commission: string; scheduleNote: string | null;
     }>();
     for (const r of rows) {
       const key = r.authorUrl || r.author?.trim() || '__unknown__';
       let g = groups.get(key);
-      if (!g) { g = { author: r.author?.trim() || null, authorUrl: r.authorUrl ?? null, platform: r.platform, count: 0, artRatio: null, style: '', styleTags: [], results: [], alreadyInLibrary: false }; groups.set(key, g); }
+      if (!g) { g = { author: r.author?.trim() || null, authorUrl: r.authorUrl ?? null, platform: r.platform, count: 0, artRatio: null, style: '', styleTags: [], results: [], alreadyInLibrary: false, bio: '', redId: '', contact: null, commission: 'unknown', scheduleNote: null }; groups.set(key, g); }
       g.count++;
       g.results.push(r);
       // 代表作按 AI 质量分降序（quality 高的排前展示），null 当 0
       g.results.sort((a: any, b: any) => (b.quality ?? 0) - (a.quality ?? 0));
       if (!g.authorUrl && r.authorUrl) g.authorUrl = r.authorUrl;
-      // 从 aiTags 里取 AI 判定的画师作品占比 + 主页画风概括（新流程存 [{isArtist,artRatio,style,reason}]）
+      // 从 aiTags 里取 AI 判定的画师作品占比 + 主页画风概括 + 联系方式/档期（新流程存 [{isArtist,artRatio,style,reason,bio,redId,contact,commission,scheduleNote}]）
       const tag0 = (r.aiTags as any[])?.[0];
       const ar = tag0?.artRatio;
       if (typeof ar === 'number' && (g.artRatio == null || ar > g.artRatio)) g.artRatio = ar;
       if (!g.style && tag0?.style) g.style = String(tag0.style);
+      if (!g.bio && tag0?.bio) g.bio = String(tag0.bio);
+      if (!g.redId && tag0?.redId) g.redId = String(tag0.redId);
+      if (!g.contact && tag0?.contact && Object.keys(tag0.contact).length) g.contact = tag0.contact;
+      if (g.commission === 'unknown' && tag0?.commission) g.commission = String(tag0.commission);
+      if (!g.scheduleNote && tag0?.scheduleNote) g.scheduleNote = String(tag0.scheduleNote);
       for (const t of (r.tags as string[] | null) || []) if (t && !g.styleTags.includes(t)) g.styleTags.push(t);
     }
     // 跨 session 去重标记：查 artists 表，名字或主页链接已存在的画师标 alreadyInLibrary，
