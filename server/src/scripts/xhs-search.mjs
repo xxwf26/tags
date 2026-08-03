@@ -72,9 +72,9 @@ async function searchOneKeyword(keyword) {
     }
   });
   try {
-    await p.goto('https://www.xiaohongshu.com/', { waitUntil: 'networkidle', timeout: 30000 });
+    await p.goto('https://www.xiaohongshu.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
     await p.waitForTimeout(2000);
-    await p.goto(`https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent(keyword)}&source=web_explore_feed`, { waitUntil: 'networkidle', timeout: 30000 });
+    await p.goto(`https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent(keyword)}&source=web_explore_feed`, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await p.waitForTimeout(6000);
     // 翻页（每页约20条，翻到 limit/keywords.length 条或到底）
     const targetPerKeyword = Math.ceil(limit / keywords.length);
@@ -87,10 +87,12 @@ async function searchOneKeyword(keyword) {
   await p.close();
 }
 
-// 先访问首页预热
+// 先访问首页预热（失败不致命，包 try/catch，别拖垮整个进程）
 const p0 = await ctx.newPage();
-await p0.goto('https://www.xiaohongshu.com/', { waitUntil: 'networkidle', timeout: 30000 });
-await p0.waitForTimeout(2000);
+try {
+  await p0.goto('https://www.xiaohongshu.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await p0.waitForTimeout(2000);
+} catch {}
 await p0.close();
 
 // 逐个关键词搜索
