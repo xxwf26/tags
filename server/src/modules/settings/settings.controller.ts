@@ -75,19 +75,20 @@ export class SettingsController {
     } catch { return { exists: false, ageDays: null }; }
   }
 
-  // 扫码登录米画师：弹出非无头浏览器窗口，业务员扫码/账号密码登录，脚本自动检测成功后存 mhs-auth.json
+  // 导入米画师登录态：米画师对 playwright 浏览器有风控（收不到验证码），改从用户已登录的真实 Chrome
+  // 配置导出 cookie（脚本 src/database/mhs-save-auth.ts）。前提：业务员先在 Chrome 登录米画师并完全关闭 Chrome。
   @Post('mhs-login')
   async mhsLogin() {
-    const scriptPath = join(process.cwd(), 'src', 'scripts', 'mhs-login.mts');
+    const scriptPath = join(process.cwd(), 'src', 'database', 'mhs-save-auth.ts');
     return new Promise((resolve) => {
       execFile(process.execPath, ['--import', 'tsx', scriptPath], {
-        maxBuffer: 10 * 1024 * 1024, timeout: 160000, windowsHide: true,
+        maxBuffer: 10 * 1024 * 1024, timeout: 90000, windowsHide: true,
       }, (err: any, stdout: any) => {
-        if (err) { resolve({ success: false, error: err.message.includes('timeout') ? '登录超时，请重试' : err.message }); return; }
+        if (err) { resolve({ success: false, error: err.message.includes('timeout') ? '导入超时，请重试' : err.message }); return; }
         try {
           const result = JSON.parse(stdout.trim().split('\n').pop() || '{}');
-          resolve(result.success ? { success: true } : { success: false, error: result.error || '登录失败' });
-        } catch { resolve({ success: false, error: '解析登录结果失败' }); }
+          resolve(result.success ? { success: true } : { success: false, error: result.error || '未读到登录态（请确认已在 Chrome 登录米画师并完全关闭 Chrome）' });
+        } catch { resolve({ success: false, error: '解析导入结果失败' }); }
       });
     });
   }

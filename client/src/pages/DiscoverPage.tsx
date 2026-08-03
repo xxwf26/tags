@@ -184,12 +184,12 @@ export function DiscoverPage() {
   const refreshMhsAuth = () => { fetch('/api/settings/mhs-auth-status').then(r => r.json()).then(setMhsAuth).catch(() => {}); };
   useEffect(() => { refreshMhsAuth(); }, []);
   const qrLoginMhs = () => {
-    setMhsLogin({ pending: true, msg: '请在弹出的浏览器窗口中扫码/登录米画师…' });
+    setMhsLogin({ pending: true, msg: '正在从 Chrome 导入登录态（会短暂弹出浏览器窗口）…' });
     fetch('/api/settings/mhs-login', { method: 'POST' })
       .then(r => r.json())
       .then(r => {
-        if (r.success) { setMhsLogin({ pending: false, msg: '✓ 登录成功，登录态已保存' }); refreshMhsAuth(); }
-        else { setMhsLogin({ pending: false, msg: '✗ ' + (r.error || '登录失败') }); }
+        if (r.success) { setMhsLogin({ pending: false, msg: '✓ 已从 Chrome 导入登录态' }); refreshMhsAuth(); }
+        else { setMhsLogin({ pending: false, msg: '✗ ' + (r.error || '导入失败') }); }
       })
       .catch(() => setMhsLogin({ pending: false, msg: '✗ 请求失败，请重试' }));
   };
@@ -244,9 +244,9 @@ export function DiscoverPage() {
           const stale = (mhsAuth.ageDays ?? 0) >= 14;
           return <span className={`text-[11px] px-2 py-0.5 rounded-full ${stale ? 'text-amber-600 bg-amber-50' : 'text-emerald-600 bg-emerald-50'}`}>已登录 · {mhsAuth.ageDays} 天前{stale ? '（可能已过期，建议重登）' : ''}</span>;
         })()}
-        <button onClick={qrLoginMhs} disabled={mhsLogin.pending} className="text-[12px] bg-violet-600 text-white rounded-full px-3 py-1.5 font-medium disabled:opacity-40">{mhsLogin.pending ? '等待登录…' : '📱 扫码登录'}</button>
+        <button onClick={qrLoginMhs} disabled={mhsLogin.pending} className="text-[12px] bg-violet-600 text-white rounded-full px-3 py-1.5 font-medium disabled:opacity-40">{mhsLogin.pending ? '导入中…' : '🔄 从 Chrome 导入登录'}</button>
         {mhsLogin.msg && <span className={`text-[11px] ${mhsLogin.pending ? 'text-violet-600' : mhsLogin.msg.startsWith('✓') ? 'text-emerald-600' : 'text-rose-500'}`}>{mhsLogin.msg}</span>}
-        <span className="text-[10px] text-stone-400 ml-auto">登录后在「按画师」视图点画师卡的「查档期」</span>
+        <span className="text-[10px] text-stone-400 ml-auto">先在 Chrome 登录米画师并<b>完全关闭 Chrome</b>，再点导入</span>
       </div>
       {/* 配置区 */}
       <div className="bg-white rounded-2xl p-4 border border-stone-100 mb-3">
