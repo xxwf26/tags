@@ -55,6 +55,8 @@ export function DiscoverPage() {
   const [viewIdx, setViewIdx] = useState(0);
   const [mhsAuthorLoadingId, setMhsAuthorLoadingId] = useState<number | null>(null);
   const [scheduleLoadingId, setScheduleLoadingId] = useState<number | null>(null);
+  const [mhsLogin, setMhsLogin] = useState<{ pending: boolean; msg: string }>({ pending: false, msg: '' });
+  const [mhsAuth, setMhsAuth] = useState<{ exists: boolean; ageDays: number | null } | null>(null);
   const [mhsFillMsg, setMhsFillMsg] = useState<string>('');
   const mhsFillTimer = useRef<number | null>(null);
   const qc = useQueryClient();
@@ -178,6 +180,20 @@ export function DiscoverPage() {
     finally { setScheduleLoadingId(null); }
   };
 
+  // 米画师登录态：查档期/主页采集依赖 mhs-auth.json，会过期
+  const refreshMhsAuth = () => { fetch('/api/settings/mhs-auth-status').then(r => r.json()).then(setMhsAuth).catch(() => {}); };
+  useEffect(() => { refreshMhsAuth(); }, []);
+  const qrLoginMhs = () => {
+    setMhsLogin({ pending: true, msg: '请在弹出的浏览器窗口中扫码/登录米画师…' });
+    fetch('/api/settings/mhs-login', { method: 'POST' })
+      .then(r => r.json())
+      .then(r => {
+        if (r.success) { setMhsLogin({ pending: false, msg: '✓ 登录成功，登录态已保存' }); refreshMhsAuth(); }
+        else { setMhsLogin({ pending: false, msg: '✗ ' + (r.error || '登录失败') }); }
+      })
+      .catch(() => setMhsLogin({ pending: false, msg: '✗ 请求失败，请重试' }));
+  };
+
   // 一键补全本 session 所有米画师结果的画师名（后端串行抓+节流，前端轮询刷新看进度）
   const fillAllMhsAuthors = async () => {
     if (!activeId) return;
@@ -219,6 +235,19 @@ export function DiscoverPage() {
 
   return (
     <div className="max-w-[1600px] mx-auto px-3 md:px-6 py-3">
+      {/* 米画师登录态（查档期 / 主页采集依赖，会过期） */}
+      <div className="bg-white rounded-2xl p-3 border border-stone-100 mb-3 flex items-center gap-2 flex-wrap">
+        <span className="text-[12px] text-stone-500 shrink-0">🔑 米画师登录态：</span>
+        {(() => {
+          if (!mhsAuth) return <span className="text-[11px] px-2 py-0.5 rounded-full text-stone-400 bg-stone-50">检测中…</span>;
+          if (!mhsAuth.exists) return <span className="text-[11px] px-2 py-0.5 rounded-full text-rose-500 bg-rose-50">未登录（查档期不可用）</span>;
+          const stale = (mhsAuth.ageDays ?? 0) >= 14;
+          return <span className={`text-[11px] px-2 py-0.5 rounded-full ${stale ? 'text-amber-600 bg-amber-50' : 'text-emerald-600 bg-emerald-50'}`}>已登录 · {mhsAuth.ageDays} 天前{stale ? '（可能已过期，建议重登）' : ''}</span>;
+        })()}
+        <button onClick={qrLoginMhs} disabled={mhsLogin.pending} className="text-[12px] bg-violet-600 text-white rounded-full px-3 py-1.5 font-medium disabled:opacity-40">{mhsLogin.pending ? '等待登录…' : '📱 扫码登录'}</button>
+        {mhsLogin.msg && <span className={`text-[11px] ${mhsLogin.pending ? 'text-violet-600' : mhsLogin.msg.startsWith('✓') ? 'text-emerald-600' : 'text-rose-500'}`}>{mhsLogin.msg}</span>}
+        <span className="text-[10px] text-stone-400 ml-auto">登录后在「按画师」视图点画师卡的「查档期」</span>
+      </div>
       {/* 配置区 */}
       <div className="bg-white rounded-2xl p-4 border border-stone-100 mb-3">
         <h2 className="font-semibold text-stone-800 text-[15px] mb-1">发现 · 按画风搜作品</h2>
