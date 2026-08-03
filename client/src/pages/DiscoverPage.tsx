@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useReferences, useUploadReference, useStartDiscover, useDiscoverSessions, useDiscoverResults, useDiscoverResultsByArtist, useDiscoverSessionsList, useReviewDiscover, usePromoteDiscover, useRejectDiscover, useDeleteReference, useAbortDiscover } from '../hooks';
-import { proxyImg } from '../api';
+import { proxyImg, fetchMhsSchedule } from '../api';
 
 const PLATFORMS = [
   { key: 'mihuashi', label: '米画师' },
@@ -54,6 +54,7 @@ export function DiscoverPage() {
   const [viewResult, setViewResult] = useState<any>(null);
   const [viewIdx, setViewIdx] = useState(0);
   const [mhsAuthorLoadingId, setMhsAuthorLoadingId] = useState<number | null>(null);
+  const [scheduleLoadingId, setScheduleLoadingId] = useState<number | null>(null);
   const [mhsFillMsg, setMhsFillMsg] = useState<string>('');
   const mhsFillTimer = useRef<number | null>(null);
   const qc = useQueryClient();
@@ -163,6 +164,19 @@ export function DiscoverPage() {
   };
   // 打开大图详情：米画师且无画师名时后台自动补
   const openViewer = (r: any) => { setViewResult(r); setViewIdx(0); if (r.platform === 'mihuashi') fillMhsAuthor(r); };
+
+  // 查档期：按需抓米画师画师主页档期/约稿，抓完刷新聚合视图，卡片即显示
+  const fetchSchedule = async (g: any) => {
+    const rid = g.results?.[0]?.id;
+    if (!rid) return;
+    setScheduleLoadingId(rid);
+    try {
+      const j = await fetchMhsSchedule(rid);
+      if (j.error) alert(j.error);
+      await byArtistQ.refetch();
+    } catch (e: any) { alert('查档期失败：' + (e?.message || '')); }
+    finally { setScheduleLoadingId(null); }
+  };
 
   // 一键补全本 session 所有米画师结果的画师名（后端串行抓+节流，前端轮询刷新看进度）
   const fillAllMhsAuthors = async () => {
@@ -415,8 +429,18 @@ export function DiscoverPage() {
                   <span className="text-[11px] text-white bg-xhs rounded-full px-2 py-0.5">命中 {g.count}</span>
                   {g.platform && <span className="text-[10px] text-stone-400">{PLATFORM_LABEL[g.platform] || g.platform}</span>}
                   {g.authorUrl && <a href={g.authorUrl} target="_blank" rel="noreferrer" className="text-[11px] text-sky-600 hover:underline">主页↗</a>}
+                  {g.commission && g.commission !== 'unknown' && (
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${g.commission === 'open' ? 'bg-green-50 text-green-700' : g.commission === 'full' ? 'bg-rose-50 text-rose-600' : 'bg-amber-50 text-amber-700'}`}>{g.commission === 'open' ? '可约' : g.commission === 'full' ? '档期满' : '仅商稿'}</span>
+                  )}
+                  {g.platform === 'mihuashi' && !g.scheduleNote && (
+                    <button onClick={() => fetchSchedule(g)} disabled={scheduleLoadingId === g.results?.[0]?.id}
+                      className="text-[10px] text-violet-600 border border-violet-200 rounded-full px-2 py-0.5 hover:bg-violet-50 disabled:opacity-50">
+                      {scheduleLoadingId === g.results?.[0]?.id ? '查档期…' : '查档期'}
+                    </button>
+                  )}
                   {g.styleTags.length > 0 && <span className="text-[10px] text-stone-400">· {g.styleTags.slice(0, 6).join(' / ')}</span>}
                 </div>
+                {g.scheduleNote && <div className="text-[11px] text-stone-500 mb-2 bg-stone-50 rounded-lg px-2.5 py-1.5" title={g.scheduleNote}>📅 {g.scheduleNote}</div>}
                 <div className="flex gap-1.5 overflow-x-auto pb-1">
                   {g.results.map(r => (
                     <div key={r.id} className="shrink-0 relative cursor-zoom-in" onClick={() => { openViewer(r); }}>

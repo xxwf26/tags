@@ -6,7 +6,7 @@ import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { join, basename } from 'node:path';
 import { db, schema } from '../../database/db.js';
 import { eq, and, desc, isNotNull, inArray } from 'drizzle-orm';
-import { searchMihuashi, fetchMihuashiArtworkAuthor, extractMihuashiArtworkId } from '../crawl/mihuashi.js';
+import { searchMihuashi, fetchMihuashiArtworkAuthor, extractMihuashiArtworkId, extractMihuashiProfileId, fetchMihuashiArtistSchedule } from '../crawl/mihuashi.js';
 import { searchXhsByKeyword, downloadImage } from '../crawl/xhs.js';
 import { searchWeiboByKeyword } from '../crawl/weibo.js';
 import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
@@ -290,6 +290,7 @@ export class DiscoverService {
     const groups = new Map<string, {
       author: string | null; authorUrl: string | null; platform: string | null;
       count: number; styleTags: string[]; results: any[];
+      commission?: string; scheduleNote?: string | null;
     }>();
     for (const r of rows) {
       const key = r.author?.trim() || '__unknown__';
@@ -298,6 +299,10 @@ export class DiscoverService {
       g.count++;
       g.results.push(r);
       if (!g.authorUrl && (r as any).authorUrl) g.authorUrl = (r as any).authorUrl;
+      // 「查档期」抓到的档期/约稿存在 aiTags[0]，透出到 group（米画师）
+      const tag0 = (r.aiTags as any[])?.[0];
+      if (tag0?.commission && !g.commission) g.commission = String(tag0.commission);
+      if (tag0?.scheduleNote && !g.scheduleNote) g.scheduleNote = String(tag0.scheduleNote);
       // 风格标签并集(取平台自带 tags，即召回关键词/xhs标签)
       for (const t of (r.tags as string[] | null) || []) if (t && !g.styleTags.includes(t)) g.styleTags.push(t);
     }
@@ -345,5 +350,43 @@ export class DiscoverService {
       { ...result, author, authorUrl },
       { filePrefix: 'discover', logType: 'discover_promote' },
     );
+  }
+
+  // 「查档期」：按需抓米画师画师主页的档期/约稿，存进同 author 所有行的 aiTags[0]（供聚合展示 + 入库写画师）。
+  async fetchArtistSchedule(resultId: number) {
+    const [result] = await db.select().from(schema.searchResults).where(eq(schema.searchResults.id, resultId));
+    if (!result) throw new Error('结果不存在');
+    if (result.platform !== 'mihuashi') throw new Error('仅米画师支持查档期');
+
+    // 补画师主页（authorUrl 缺失时先取一次，同 promote 逻辑并写回）
+    let author = result.author;
+    let authorUrl = (result as any).authorUrl as string | null;
+    if (!authorUrl && result.sourceUrl) {
+      const artId = extractMihuashiArtworkId(result.sourceUrl);
+      if (artId) {
+        const info = await fetchMihuashiArtworkAuthor(artId);
+        author = info.author ?? author;
+        authorUrl = info.authorUrl || authorUrl;
+        if (author) await db.update(schema.searchResults).set({ author, authorUrl }).where(eq(schema.searchResults.id, resultId));
+      }
+    }
+    const profileId = authorUrl ? extractMihuashiProfileId(authorUrl) : null;
+    if (!profileId) return { author, authorUrl, commission: null, scheduleNote: null, error: '未找到画师主页' };
+
+    const sched = await fetchMihuashiArtistSchedule(profileId);
+    if (!sched) return { author, authorUrl, commission: null, scheduleNote: null, error: '抓取档期失败（反爬或超时），可重试' };
+
+    // 写进本 session 内同 author 所有行的 aiTags[0]（含未署名前先补的 author）
+    const key = author?.trim();
+    if (key) {
+      const rows = await db.select().from(schema.searchResults)
+        .where(and(eq(schema.searchResults.sessionId, result.sessionId), eq(schema.searchResults.author, key)));
+      for (const r of rows) {
+        const tags = Array.isArray(r.aiTags) ? [...(r.aiTags as any[])] : [];
+        tags[0] = { ...(tags[0] || {}), commission: sched.commission, scheduleNote: sched.scheduleNote };
+        await db.update(schema.searchResults).set({ aiTags: tags as any }).where(eq(schema.searchResults.id, r.id));
+      }
+    }
+    return { author, authorUrl, commission: sched.commission, scheduleNote: sched.scheduleNote };
   }
 }

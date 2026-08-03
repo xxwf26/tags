@@ -111,6 +111,68 @@ export function extractMihuashiArtworkId(url: string): string | null {
   return m ? m[1] : null;
 }
 
+export type MhsSchedule = { commission: 'open' | 'full' | 'unknown'; scheduleNote: string | null };
+
+// 从米画师主页原始字段派生「档期状态 + 约稿详情备注」。抽成纯函数便于单测。
+export function deriveSchedule(raw: {
+  workSchedules?: { year: number; month: number; part?: string; state?: string }[] | null;
+  userAbout?: { introduction?: string; price_range?: string; online_time?: string; like_type?: string; dislike_type?: string } | null;
+  inviteCalendar?: { open_date?: string | null } | null;
+  about?: string | null;
+}, now = new Date()): MhsSchedule {
+  const ws = Array.isArray(raw.workSchedules) ? raw.workSchedules : [];
+  const nowKey = now.getFullYear() * 12 + (now.getMonth() + 1);
+  const future = ws.filter(w => w?.year && w?.month && (w.year * 12 + w.month) >= nowKey);
+  // 档期状态：未来档期全 busy → 满；有非 busy → 可约；无数据 → 未知
+  let commission: MhsSchedule['commission'] = 'unknown';
+  if (future.length) commission = future.every(w => w.state === 'busy') ? 'full' : 'open';
+
+  const parts: string[] = [];
+  // 档期概要
+  if (future.length) {
+    if (commission === 'full') {
+      const last = future.reduce((a, w) => (w.year * 12 + w.month) > (a.year * 12 + a.month) ? w : a);
+      parts.push(`档期：近期已满(至${last.year}.${String(last.month).padStart(2, '0')})`);
+    } else {
+      const free = future.find(w => w.state !== 'busy');
+      parts.push(`档期：有空档${free ? `(${free.year}.${String(free.month).padStart(2, '0')})` : ''}`);
+    }
+  }
+  // 下次开约日期
+  const open = raw.inviteCalendar?.open_date;
+  if (open) { const d = String(open).slice(0, 10); if (d) parts.push(`下次开约：${d}`); }
+  // 约稿详情
+  const ua = raw.userAbout || {};
+  if (ua.price_range) parts.push(`报价：${ua.price_range}`);
+  if (ua.online_time) parts.push(`接稿时间：${String(ua.online_time).replace(/\n+/g, ' ').trim()}`);
+  if (ua.like_type) parts.push(`约稿要求：${ua.like_type}`);
+  if (ua.dislike_type) parts.push(`不接：${ua.dislike_type}`);
+
+  const scheduleNote = parts.length ? parts.join(' ｜ ').slice(0, 200) : null;
+  return { commission, scheduleNote };
+}
+
+// 抓米画师画师主页的档期/约稿信息（发现流程「查档期」按需调用）。子进程隔离 + 串行锁，同 search 反爬。
+export async function fetchMihuashiArtistSchedule(profileId: string | number): Promise<MhsSchedule | null> {
+  const id = String(profileId).trim();
+  if (!id || !/^\d+$/.test(id)) return null;
+  const scriptPath = join(process.cwd(), 'src', 'scripts', 'mhs-profile.mts');
+  const runOnce = (): Promise<MhsSchedule | null> => new Promise((resolve) => {
+    execFile(process.execPath, ['--import', 'tsx', scriptPath, id], {
+      maxBuffer: 8 * 1024 * 1024, timeout: 90000, windowsHide: true,
+    }, (err: any, stdout: any) => {
+      if (err) { console.error(`[mhs] 取画师 ${id} 档期失败: ${err.message}`); resolve(null); return; }
+      try {
+        const raw = JSON.parse(stdout);
+        if (raw?.error) { resolve(null); return; }
+        resolve(deriveSchedule(raw));
+      } catch { resolve(null); }
+    });
+  });
+  return withMhsLock(runOnce);
+}
+
+
 // 拉米画师可用画风标签（供前端下拉 + getTagIdMap）。走子进程 mhs-tags.mts：chromium segfault 只杀子进程不拖垮主服务。
 // 进程内缓存 10 分钟。
 let _tagsCache: { data: { id: number; name: string; type: string }[]; ts: number } | null = null;

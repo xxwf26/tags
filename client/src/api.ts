@@ -258,6 +258,7 @@ export type DiscoverResult = {
 export type DiscoverArtistGroup = {
   author: string | null; authorUrl: string | null; platform: string | null;
   count: number; styleTags: string[]; results: DiscoverResult[];
+  commission?: string; scheduleNote?: string | null;
 };
 export type DiscoverTask = { status: string; done: number; total: number; resultCount: number; mode: 'image' | 'tags'; stats?: any };
 // 发起发现：referenceId(可选) + tags(可选 [{label}]) + platforms
@@ -295,4 +296,8 @@ export async function promoteDiscover(id: number) {
 }
 export async function rejectDiscover(id: number) {
   const r = await fetch(BASE + '/discover/results/' + id + '/reject', { method: 'POST' }); if (!r.ok) throw new Error('reject failed'); return r.json();
+}
+export async function fetchMhsSchedule(resultId: number): Promise<{ author: string | null; authorUrl: string | null; commission: string | null; scheduleNote: string | null; error?: string }> {
+  const r = await fetch(BASE + '/discover/results/' + resultId + '/mhs-schedule', { method: 'POST' });
+  if (!r.ok) throw new Error('查档期失败'); return r.json();
 }

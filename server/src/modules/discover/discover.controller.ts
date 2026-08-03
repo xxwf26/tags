@@ -54,4 +54,8 @@ export class DiscoverController {
   // 正式入库
   @Post('results/:id/promote')
   promote(@Param('id', ParseIntPipe) id: number) { return this.discoverService.promote(id); }
+
+  // 查档期：按需抓米画师画师主页档期/约稿
+  @Post('results/:id/mhs-schedule')
+  mhsSchedule(@Param('id', ParseIntPipe) id: number) { return this.discoverService.fetchArtistSchedule(id); }
 }
