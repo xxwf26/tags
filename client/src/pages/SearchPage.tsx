@@ -50,6 +50,16 @@ export function SearchPage() {
   });
   const [viewResult, setViewResult] = useState<any>(null);
   const [viewImgIdx, setViewImgIdx] = useState(0);
+  // 米画师同名反查：按画师卡 key 存候选面板状态（按需触发，plain fetch 不进 react-query）
+  type MhsHit = { profileId: number; name: string | null; avatarUrl: string | null; profileUrl: string | null; isVerified: boolean; credit: string | null; scheduleState: string | null; inviteOpenDate: string | null; artworks: { mhsId: number; imageUrl: string; likes: number | null }[] };
+  const [mhsLookup, setMhsLookup] = useState<Record<string, { loading: boolean; artists: MhsHit[] | null }>>({});
+  const doMhsLookup = useCallback((key: string, name: string) => {
+    setMhsLookup(prev => (prev[key] && !prev[key].artists ? prev : { ...prev, [key]: { loading: true, artists: null } }));
+    fetch(BASE + '/search/mhs-artist-search?name=' + encodeURIComponent(name))
+      .then(res => res.json())
+      .then((r: { artists: MhsHit[] }) => setMhsLookup(prev => ({ ...prev, [key]: { loading: false, artists: r.artists || [] } })))
+      .catch(() => setMhsLookup(prev => ({ ...prev, [key]: { loading: false, artists: [] } })));
+  }, []);
   // 搜索历史折叠：默认收起（只显示最近几条），状态持久化
   const [historyExpanded, setHistoryExpanded] = useState(() => localStorage.getItem(SEARCH_HISTORY_EXPANDED_KEY) === '1');
   useEffect(() => { localStorage.setItem(SEARCH_HISTORY_EXPANDED_KEY, historyExpanded ? '1' : '0'); }, [historyExpanded]);
@@ -541,6 +551,18 @@ export function SearchPage() {
                   {g.style && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-600">画风：{g.style}</span>}
                   {g.authorUrl && <a href={g.authorUrl} target="_blank" rel="noopener noreferrer" className="text-[11px] text-sky-600 hover:underline">主页 ↗</a>}
                   {g.styleTags.length > 0 && <span className="text-[10px] text-stone-400">命中：{g.styleTags.slice(0, 6).join(' / ')}</span>}
+                  {/* 米画师同名反查：小红书画师才有意义（米画师卡本身不查），用昵称去米画师搜同名账号供人工对图确认 */}
+                  {g.author && g.platform !== 'mihuashi' && (() => {
+                    const key = g.authorUrl || g.author || String(gi);
+                    const st = mhsLookup[key];
+                    return (
+                      <button onClick={() => doMhsLookup(key, g.author!)} disabled={st?.loading}
+                        className="text-[11px] text-orange-600 border border-orange-300/60 rounded-full px-2.5 py-0.5 hover:bg-orange-50 disabled:opacity-40"
+                        title="用小红书昵称去米画师搜同名画师账号（撞名≠同一人，请对图确认）">
+                        {st?.loading ? '查询中…' : '🔍 查米画师同名'}
+                      </button>
+                    );
+                  })()}
                   {/* 两步入库：① 复核 tier1→tier2（人工挑选满意的画师）② 入库建联 tier2→promoted（建画师记录+存主页链接）。
                       按画师整组的状态显示对应按钮，避免对同一行并发 review+promote。
                       入库串行（mutateAsync 逐个 await）：同画师多张代表作若并发 promote，会同时 findOrCreateArtist
@@ -592,6 +614,41 @@ export function SearchPage() {
                     </div>
                   ))}
                 </div>
+                {/* 米画师同名候选面板：查过才显示。样图与上方小红书代表作对图确认是不是同一人 */}
+                {(() => {
+                  const key = g.authorUrl || g.author || String(gi);
+                  const st = mhsLookup[key];
+                  if (!st || st.loading || st.artists === null) return null;
+                  if (!st.artists.length) return (
+                    <div className="mt-2 pt-2 border-t border-dashed border-orange-200 text-[11px] text-stone-400">米画师未搜到「{g.author}」的同名画师</div>
+                  );
+                  return (
+                    <div className="mt-2 pt-2 border-t border-dashed border-orange-200 space-y-2">
+                      <div className="text-[11px] text-orange-600 font-medium">米画师同名候选 {st.artists.length} 位（对图确认是否同一人 · 撞名不代表同人）</div>
+                      {st.artists.map(a => (
+                        <div key={a.profileId} className="flex gap-2 items-start bg-orange-50/40 rounded-lg p-2">
+                          {a.avatarUrl && <img src={proxyImg(a.avatarUrl)} className="w-9 h-9 rounded-full object-cover shrink-0 border border-orange-100" alt="" onError={e => ((e.target as HTMLImageElement).style.opacity = '0.3')} />}
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
+                              <span className="font-semibold text-stone-700 truncate max-w-[160px]">{a.name || '未命名'}</span>
+                              {a.isVerified && <span className="px-1 rounded bg-sky-100 text-sky-600 text-[10px]">已认证</span>}
+                              {a.credit && <span className="text-stone-500">{a.credit}</span>}
+                              {a.inviteOpenDate ? <span className="text-emerald-600">下次开约 {String(a.inviteOpenDate).slice(0, 10)}</span> : a.scheduleState && a.scheduleState !== 'unset' && <span className="text-stone-400">档期 {a.scheduleState}</span>}
+                              {a.profileUrl && <a href={a.profileUrl} target="_blank" rel="noopener noreferrer" className="text-sky-600 hover:underline">主页 ↗</a>}
+                            </div>
+                            {a.artworks.length > 0 && (
+                              <div className="flex gap-1.5 overflow-x-auto mt-1.5 pb-1">
+                                {a.artworks.map(w => (
+                                  <img key={w.mhsId} src={proxyImg(w.imageUrl)} className="h-20 rounded object-cover border border-orange-100 shrink-0" style={{ maxWidth: 120 }} alt="" onError={e => ((e.target as HTMLImageElement).style.opacity = '0.3')} />
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
             ))}
           </div>

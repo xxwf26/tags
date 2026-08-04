@@ -78,4 +78,8 @@ export class SearchController {
   // 批量补全 session 内米画师结果的画师名（后台串行，立即返回）
   @Post('sessions/:id/fill-mhs-authors')
   fillMhsAuthors(@Param('id', ParseIntPipe) id: number) { return this.searchService.fillSessionMhsAuthors(id); }
+
+  // 按小红书画师昵称反查米画师同名画师：GET /api/search/mhs-artist-search?name=xxx
+  @Get('mhs-artist-search')
+  mhsArtistSearch(@Query('name') name: string) { return this.searchService.mhsArtistSearch(name || ''); }
 }

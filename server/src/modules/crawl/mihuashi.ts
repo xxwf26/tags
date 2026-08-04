@@ -105,6 +105,65 @@ export async function fetchMihuashiArtworkAuthor(artworkId: string | number): Pr
   return withMhsLock(runOnce);
 }
 
+export type MhsArtistHit = {
+  profileId: number;
+  name: string | null;
+  avatarUrl: string | null;
+  profileUrl: string | null;
+  isVerified: boolean;
+  role: string | null;
+  credit: string | null;          // 接单量/准时率概要，无数据为 null
+  scheduleState: string | null;   // work_schedule_state 原始值
+  inviteOpenDate: string | null;  // 下次开约日期（有则大概率可约）
+  artworks: { mhsId: number; imageUrl: string; width: number | null; height: number | null; likes: number | null }[];
+};
+
+// 按昵称搜米画师同名画师（小红书寻源画师 → 反查米画师账号）。走子进程 mhs-artist-search.mts +
+// 串行锁（与 searchMihuashi 共享浏览器反爬约束）。name 走 argv（中文安全，同 xhs-search）。
+// 命中即返回候选清单，含样图供人工与小红书代表作对图确认——撞名≠同一人，故不自动关联。
+export async function searchMihuashiArtists(name: string, limit = 8): Promise<MhsArtistHit[]> {
+  const q = String(name || '').trim();
+  if (!q) return [];
+  const scriptPath = join(process.cwd(), 'src', 'scripts', 'mhs-artist-search.mts');
+  const runOnce = (): Promise<MhsArtistHit[]> => new Promise((resolve) => {
+    execFile(process.execPath, ['--import', 'tsx', scriptPath, q, String(limit)], {
+      maxBuffer: 16 * 1024 * 1024, timeout: 90000, windowsHide: true,
+    }, (err: any, stdout: any) => {
+      if (err) { console.error(`[mhs] 同名搜画师 "${q}" 失败: ${err.message}`); resolve([]); return; }
+      try { resolve((JSON.parse(stdout).artists || []) as MhsArtistHit[]); }
+      catch { resolve([]); }
+    });
+  });
+  return withMhsLock(runOnce);
+}
+
+// 爬米画师画师主页作品 + 画师名（走子进程 mhs-artist-works.mts，需登录态 mhs-auth.json）。
+// 与主进程版 fetchMihuashiArtistWorks 同逻辑，但子进程隔离——发现流程会连爬多个画师主页，
+// 主进程反复起 chromium 会 segfault，故补图链路必须走子进程 + 串行锁（共享反爬约束）。
+export async function crawlMihuashiHomepageWorks(profileId: string | number, limit = 8): Promise<{ name: string | null; works: MhsArtwork[] }> {
+  const id = String(profileId).trim();
+  if (!id || !/^\d+$/.test(id)) return { name: null, works: [] };
+  const scriptPath = join(process.cwd(), 'src', 'scripts', 'mhs-artist-works.mts');
+  const runOnce = (): Promise<{ name: string | null; works: MhsArtwork[] }> => new Promise((resolve) => {
+    execFile(process.execPath, ['--import', 'tsx', scriptPath, id, String(limit)], {
+      maxBuffer: 32 * 1024 * 1024, timeout: 120000, windowsHide: true,
+    }, (err: any, stdout: any) => {
+      if (err) { console.error(`[mhs] 子进程爬主页作品 ${id} 失败: ${err.message}`); resolve({ name: null, works: [] }); return; }
+      try { const j = JSON.parse(stdout); resolve({ name: j.name ?? null, works: (j.arts || []) as MhsArtwork[] }); }
+      catch { resolve({ name: null, works: [] }); }
+    });
+  });
+  return withMhsLock(runOnce);
+}
+
+// 从米画师图片 URL 抠画师 profileId：image-assets.mihuashi.com/[pfop/]permanent/{profileId}|-日期/...
+// 作品列表接口(/artworks/search)不返回作者，但图片路径里嵌了 profileId，可零成本反查画师。
+// 注意：早期(约2020前)上传的图是纯日期路径无 profileId，抠不到返回 null（少数）。
+export function extractMihuashiProfileIdFromImage(url: string): string | null {
+  const m = String(url || '').match(/permanent\/(\d+)\|/);
+  return m ? m[1] : null;
+}
+
 // 从米画师作品页 URL 抠作品 id：https://www.mihuashi.com/artworks/36711276
 export function extractMihuashiArtworkId(url: string): string | null {
   const m = String(url || '').match(/mihuashi\.com\/artworks\/(\d+)/);

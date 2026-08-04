@@ -6,7 +6,7 @@ import { basename, join } from 'node:path';
 import { db, schema } from '../../database/db.js';
 import { eq, and, desc, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { searchXhsByKeyword, downloadImage, buildProfileUrl, fetchProfileNotes } from '../crawl/xhs.js';
-import { fetchMihuashiArtworkAuthor, extractMihuashiArtworkId } from '../crawl/mihuashi.js';
+import { fetchMihuashiArtworkAuthor, extractMihuashiArtworkId, searchMihuashiArtists } from '../crawl/mihuashi.js';
 import { aHash, hexToNibbles, hammingNib, DEDUP_THRESHOLD } from '../imghash/imghash.js';
 import { logOperation } from '../operation/op.js';
 import { judgeArtistAccount, isAiConfigured } from '../tagging/ai.js';
@@ -532,5 +532,14 @@ export class SearchService {
       console.log(`[search] session ${sessionId} 画师名补全完成，共 ${pending.length} 张`);
     })();
     return { started: true as const, pending: pending.length };
+  }
+
+  // 小红书寻源画师 → 用其昵称反查米画师同名画师（按需，前端画师卡「查米画师同名」按钮触发）。
+  // 只做「查+展示」：返回候选清单（含样图/认证/信誉/档期），由人工对图确认——撞名≠同一人，不自动关联。
+  async mhsArtistSearch(name: string): Promise<{ query: string; artists: Awaited<ReturnType<typeof searchMihuashiArtists>> }> {
+    const q = (name || '').trim();
+    if (!q) return { query: '', artists: [] };
+    const artists = await searchMihuashiArtists(q, 8);
+    return { query: q, artists };
   }
 }

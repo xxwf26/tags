@@ -6,7 +6,7 @@ import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { join, basename } from 'node:path';
 import { db, schema } from '../../database/db.js';
 import { eq, and, desc, isNotNull, inArray } from 'drizzle-orm';
-import { searchMihuashi, fetchMihuashiArtworkAuthor, extractMihuashiArtworkId, extractMihuashiProfileId, fetchMihuashiArtistSchedule } from '../crawl/mihuashi.js';
+import { searchMihuashi, fetchMihuashiArtworkAuthor, extractMihuashiArtworkId, extractMihuashiProfileId, fetchMihuashiArtistSchedule, crawlMihuashiHomepageWorks, extractMihuashiProfileIdFromImage } from '../crawl/mihuashi.js';
 import { searchXhsByKeyword, downloadImage } from '../crawl/xhs.js';
 import { searchWeiboByKeyword } from '../crawl/weibo.js';
 import { aHash, hamming, DEDUP_THRESHOLD } from '../imghash/imghash.js';
@@ -24,6 +24,13 @@ const SIM_FLOOR = 0.2;      // image 模式相似度下限（很宽松，只砍�
 // CLIP 视觉精排总开关。false = 关闭（因 CLIP worker 与 playwright chromium 同进程 segfault，方案A 先保稳定）。
 // 方案B 将 CLIP 移到独立子进程后改回 true。关闭时 image 模式自动退化为纯质量排序。
 const CLIP_ENABLED = false;
+
+// 画师主页补图：发现是「按标签捞作品」，标签流散在众多画师上→聚合后每画师仅~1张。
+// 召回后对米画师画师补抓其主页作品（复用寻源「作者中心」思路），让每画师有多张代表作。
+// 补来的图仍走同一条 去重+AI质检+CLIP 管线入库，行为一致。
+const ENRICH_ARTISTS = true;     // 总开关（可被 start 的 enrichArtists 覆盖）
+const ENRICH_ARTISTS_CAP = 15;   // 每次发现最多补抓多少位画师主页（限流+控时，串行爬）
+const ENRICH_PER_ARTIST = 8;     // 每位画师补抓多少张主页作品
 
 // 米画师站内筛选只认这套官方标签（画风 + 类型两个维度）。用它作白名单：
 // 采集靠点击页面上「文字=关键词」的标签按钮，非官方词点不中、只会空跑，故直接跳过。
@@ -141,6 +148,47 @@ export class DiscoverService {
             for (const n of notes) if (n.images.length) pool.push({ platform, imageUrl: n.images[0], sourceUrl: n.sourceUrl, title: n.title || kw, author: n.author || null, authorUrl: null, tags: n.xhsTags || [], allImages: n.images });
           }
         } catch (e: any) { console.error(`[discover] ${platform} "${kw}" 召回失败: ${e.message}`); }
+      }
+    }
+
+    // 1.5) 画师主页补图：解决「按标签捞作品→每画师仅~1张」。
+    // 米画师作品列表接口不返回作者，但图片 URL 里嵌了 profileId → 零成本抠出画师并去重，
+    // 逐个爬其主页作品补进池子；顺便抓画师名回填召回作品（否则聚合全归"未知作者"）。
+    // 补来的图走后续同一条 去重+AI质检+CLIP 管线入库，行为一致。
+    if (ENRICH_ARTISTS && platforms.includes('mihuashi') && !isAborted()) {
+      // 召回的米画师作品按 profileId 分组（从图 URL 抠），保持召回顺序（越靠前越相关）
+      const artistMap = new Map<string, { tags: string[]; poolItems: Recalled[] }>();
+      for (const r of pool) {
+        if (r.platform !== 'mihuashi') continue;
+        const pid = extractMihuashiProfileIdFromImage(r.imageUrl);
+        if (!pid) continue;
+        let g = artistMap.get(pid);
+        if (!g) { g = { tags: r.tags, poolItems: [] }; artistMap.set(pid, g); }
+        g.poolItems.push(r);
+      }
+      const targets = [...artistMap.entries()].slice(0, ENRICH_ARTISTS_CAP);
+      if (targets.length) {
+        console.log(`[discover] session ${sessionId} 画师主页补图：${targets.length} 位画师（每人≤${ENRICH_PER_ARTIST}张）`);
+        let enriched = 0;
+        for (const [pid, g] of targets) {
+          if (isAborted()) break;
+          try {
+            const { name, works } = await crawlMihuashiHomepageWorks(pid, ENRICH_PER_ARTIST);
+            const authorUrl = `https://www.mihuashi.com/profiles/${pid}`;
+            // 回填召回作品的作者名+主页（否则聚合按名分组时全归"未知作者"）
+            for (const it of g.poolItems) { if (name) it.author = name; it.authorUrl = authorUrl; }
+            for (const w of works) {
+              pool.push({
+                platform: 'mihuashi', imageUrl: w.imageUrl,
+                sourceUrl: `https://www.mihuashi.com/artworks/${w.mhsId}`,
+                title: `米画师·主页作品`, author: name, authorUrl,
+                tags: g.tags, allImages: [w.imageUrl],
+              });
+            }
+            enriched += works.length;
+          } catch (e: any) { console.error(`[discover] 画师 ${pid} 主页补图失败: ${e.message}`); }
+        }
+        console.log(`[discover] session ${sessionId} 补图完成，新增候选 ${enriched} 张（去重前）`);
       }
     }
 
