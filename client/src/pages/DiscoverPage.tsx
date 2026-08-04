@@ -53,6 +53,8 @@ export function DiscoverPage() {
   const [activeId, setActiveId] = useState<number | null>(() => { const s = loadSessions(); return s[s.length - 1]?.id ?? null; });
   const [viewResult, setViewResult] = useState<any>(null);
   const [viewIdx, setViewIdx] = useState(0);
+  // 大图查看器的可翻页帧：每帧 = {图片, 所属result}。逐张视图=单个result的多图；按画师视图=整组作品，可在大图里翻看该画师全部作品。
+  const [viewFrames, setViewFrames] = useState<{ img: string; result: any }[]>([]);
   const [mhsAuthorLoadingId, setMhsAuthorLoadingId] = useState<number | null>(null);
   const [scheduleLoadingId, setScheduleLoadingId] = useState<number | null>(null);
   const [mhsLogin, setMhsLogin] = useState<{ pending: boolean; msg: string }>({ pending: false, msg: '' });
@@ -60,7 +62,7 @@ export function DiscoverPage() {
   const [mhsFillMsg, setMhsFillMsg] = useState<string>('');
   const mhsFillTimer = useRef<number | null>(null);
   const qc = useQueryClient();
-  const [resultView, setResultView] = useState<'grid' | 'artist'>('grid'); // 结果视图：逐张瀑布流 / 按画师聚合
+  const [resultView, setResultView] = useState<'grid' | 'artist'>('artist'); // 结果视图：默认按画师聚合（寻源常是"找画这种风格的人"）；'grid'=逐张瀑布流
 
   // 并行轮询所有 session 的任务状态（running 的自动刷新，完成的停）
   const sessionQueries = useDiscoverSessions(sessions.map(s => s.id));
@@ -130,16 +132,24 @@ export function DiscoverPage() {
   // react-query 会保留上一个 session 的旧 data；此处用 hasResults 守卫置空，避免结果区张冠李戴。
   const results = hasResults ? (resultsQ.data ?? []) : [];
   const artistGroups = hasResults ? (byArtistQ.data ?? []) : [];
-  const viewImgs: string[] = viewResult?.allImages?.length ? viewResult.allImages : (viewResult?.imageUrl ? [viewResult.imageUrl] : []);
+  const viewImgs: string[] = viewFrames.map(f => f.img);
+  // 翻页：切换帧同时把 viewResult 更新为该帧所属作品（大图下方画师主页/原页链接随之对应）
+  const gotoView = (nextIdx: number) => {
+    const n = viewFrames.length; if (!n) return;
+    const idx = ((nextIdx % n) + n) % n;
+    setViewIdx(idx);
+    const r = viewFrames[idx]?.result;
+    if (r) { setViewResult(r); if (r.platform === 'mihuashi' && !r.author) fillMhsAuthor(r); }
+  };
   useEffect(() => {
     if (!viewResult) return;
     const h = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setViewResult(null);
-      else if (e.key === 'ArrowLeft') setViewIdx(i => (i - 1 + viewImgs.length) % viewImgs.length);
-      else if (e.key === 'ArrowRight') setViewIdx(i => (i + 1) % viewImgs.length);
+      else if (e.key === 'ArrowLeft') gotoView(viewIdx - 1);
+      else if (e.key === 'ArrowRight') gotoView(viewIdx + 1);
     };
     window.addEventListener('keydown', h); return () => window.removeEventListener('keydown', h);
-  }, [viewResult, viewImgs.length]);
+  }, [viewResult, viewFrames, viewIdx]);
 
   // 米画师画师主页/名字：列表接口不返回画师，按需从作品详情接口取。
   // 取到后回填服务端缓存 + 刷新结果列表，下次该卡片直接有名字/直链。
@@ -164,8 +174,17 @@ export function DiscoverPage() {
     if (j?.authorUrl) window.open(j.authorUrl, '_blank', 'noopener');
     else alert('未能获取画师主页（作品可能已下架或接口未返回画师）');
   };
-  // 打开大图详情：米画师且无画师名时后台自动补
-  const openViewer = (r: any) => { setViewResult(r); setViewIdx(0); if (r.platform === 'mihuashi') fillMhsAuthor(r); };
+  // 打开大图查看器：以传入的作品列表为可翻页帧，从点击那张开始，可用 ‹ ›/←→ 翻看整列表。
+  // 逐张视图传当前页全部结果、按画师视图传该画师整组作品。优先用本地图 imageUrl（已下载最稳），无则退外链首图。
+  // 米画师且无画师名时后台自动补。
+  const openListViewer = (list: any[], r: any) => {
+    const frames = (list || [])
+      .map((x: any) => ({ img: x.imageUrl || x.allImages?.[0] || '', result: x }))
+      .filter((f: any) => f.img);
+    const idx = Math.max(0, frames.findIndex((f: any) => f.result.id === r.id));
+    setViewFrames(frames); setViewResult(r); setViewIdx(idx);
+    if (r.platform === 'mihuashi' && !r.author) fillMhsAuthor(r);
+  };
 
   // 查档期：按需抓米画师画师主页档期/约稿，抓完刷新聚合视图，卡片即显示
   const fetchSchedule = async (g: any) => {
@@ -407,7 +426,7 @@ export function DiscoverPage() {
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-2.5">
             {results.map(r => (
               <div key={r.id} className="bg-white rounded-xl overflow-hidden border border-stone-100 card-hover">
-                <div className="relative cursor-zoom-in" onClick={() => { openViewer(r); }}>
+                <div className="relative cursor-zoom-in" onClick={() => { openListViewer(results, r); }}>
                   <img src={proxyImg(r.imageUrl)} className="w-full object-cover" style={{ aspectRatio: '3/4' }}
                     onError={e => ((e.target as HTMLImageElement).style.opacity = '0.3')} alt="" />
                   {r.quality != null
@@ -494,7 +513,7 @@ export function DiscoverPage() {
                 {g.scheduleNote && <div className="text-[11px] text-stone-500 mb-2 bg-stone-50 rounded-lg px-2.5 py-1.5" title={g.scheduleNote}>📅 {g.scheduleNote}</div>}
                 <div className="flex gap-1.5 overflow-x-auto pb-1">
                   {g.results.map(r => (
-                    <div key={r.id} className="shrink-0 relative cursor-zoom-in" onClick={() => { openViewer(r); }}>
+                    <div key={r.id} className="shrink-0 relative cursor-zoom-in" onClick={() => { openListViewer(g.results, r); }}>
                       <img src={proxyImg(r.imageUrl)} className="h-28 w-auto rounded-lg object-cover" style={{ maxWidth: 160 }}
                         onError={e => ((e.target as HTMLImageElement).style.opacity = '0.3')} alt="" />
                       {r.similarity != null && <span className="absolute top-1 right-1 text-[9px] px-1 py-0.5 rounded bg-xhs/80 text-white">似 {(r.similarity * 100).toFixed(0)}</span>}
@@ -514,6 +533,9 @@ export function DiscoverPage() {
       {/* 大图查看 */}
       {viewResult && viewImgs.length > 0 && (
         <div className="fixed inset-0 bg-black/92 z-[60] flex flex-col" onClick={() => setViewResult(null)}>
+          {/* 翻页箭头固定在视口左右边缘、垂直居中，不随图片尺寸变动 */}
+          {viewImgs.length > 1 && <button onClick={e => { e.stopPropagation(); gotoView(viewIdx - 1); }} className="absolute left-3 md:left-5 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-black/45 text-white text-2xl flex items-center justify-center hover:bg-xhs z-10">‹</button>}
+          {viewImgs.length > 1 && <button onClick={e => { e.stopPropagation(); gotoView(viewIdx + 1); }} className="absolute right-3 md:right-5 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-black/45 text-white text-2xl flex items-center justify-center hover:bg-xhs z-10">›</button>}
           <div className="flex items-center justify-between px-4 md:px-6 pt-4 text-white/80 text-xs md:text-sm shrink-0" onClick={e => e.stopPropagation()}>
             <span className="truncate">{viewResult.title || '未命名'} · 画师：{viewResult.author || '未知'} · {PLATFORM_LABEL[viewResult.platform] || viewResult.platform}</span>
             <span className="shrink-0 ml-2">{viewIdx + 1}/{viewImgs.length} · ←/→ · ESC</span>
@@ -522,8 +544,6 @@ export function DiscoverPage() {
             <div className="my-auto flex flex-col items-center gap-3" onClick={e => e.stopPropagation()}>
               <div className="relative">
                 <img src={proxyImg(viewImgs[viewIdx])} className="max-h-[74vh] max-w-full rounded-xl object-contain shadow-2xl" alt="" />
-                {viewImgs.length > 1 && <button onClick={() => setViewIdx(i => (i - 1 + viewImgs.length) % viewImgs.length)} className="absolute left-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/45 text-white text-xl hover:bg-xhs">‹</button>}
-                {viewImgs.length > 1 && <button onClick={() => setViewIdx(i => (i + 1) % viewImgs.length)} className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/45 text-white text-xl hover:bg-xhs">›</button>}
               </div>
               <div className="flex gap-2">
                 {viewResult.platform === 'mihuashi' && (
