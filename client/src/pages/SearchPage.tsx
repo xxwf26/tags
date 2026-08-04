@@ -585,7 +585,9 @@ export function SearchPage() {
                       <button onClick={() => runSerial(t2, promoteM)}
                         className="ml-auto text-[11px] text-xhs border border-xhs/30 rounded-full px-2.5 py-0.5 hover:bg-xhs-soft">入库建联</button>
                     );
-                    return <span className="ml-auto text-[11px] text-emerald-600">✓ 已入库</span>;
+                    // 无待处理项：区分「已入库」与「全部丢弃」——不能一律当已入库
+                    if (g.results.some(r => r.tier === 'promoted')) return <span className="ml-auto text-[11px] text-emerald-600">✓ 已入库</span>;
+                    return <span className="ml-auto text-[11px] text-stone-400">已丢弃</span>;
                   })()}
                 </div>
                 {(() => {
