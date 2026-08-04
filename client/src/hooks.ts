@@ -211,15 +211,15 @@ export function useDiscoverSessionsList() {
 export function useReviewDiscover() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (id: number) => reviewDiscover(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['discover-results'] }) });
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['discover-results'] }); qc.invalidateQueries({ queryKey: ['discover-results-by-artist'] }); } });
 }
 export function usePromoteDiscover() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (id: number) => promoteDiscover(id),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['discover-results'] }); qc.invalidateQueries({ queryKey: ['artworks'] }); qc.invalidateQueries({ queryKey: ['artists'] }); } });
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['discover-results'] }); qc.invalidateQueries({ queryKey: ['discover-results-by-artist'] }); qc.invalidateQueries({ queryKey: ['artworks'] }); qc.invalidateQueries({ queryKey: ['artists'] }); } });
 }
 export function useRejectDiscover() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (id: number) => rejectDiscover(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['discover-results'] }) });
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['discover-results'] }); qc.invalidateQueries({ queryKey: ['discover-results-by-artist'] }); } });
 }

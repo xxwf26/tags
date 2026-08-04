@@ -468,6 +468,28 @@ export function DiscoverPage() {
                     </button>
                   )}
                   {g.styleTags.length > 0 && <span className="text-[10px] text-stone-400">· {g.styleTags.slice(0, 6).join(' / ')}</span>}
+                  {/* 整组复核/入库：对该画师这组结果统一操作（tier1→丢弃/复核，tier2→入库）。
+                      入库串行 mutateAsync：同画师多张并发 promote 会各自 findOrCreateArtist→建重复画师，串行后复用。 */}
+                  {(() => {
+                    const t1 = g.results.filter(r => r.tier === 'tier1');
+                    const t2 = g.results.filter(r => r.tier === 'tier2');
+                    const runSerial = async (rows: typeof g.results, m: typeof promoteM) => {
+                      for (const r of rows) { try { await m.mutateAsync(r.id); } catch { /* 单张失败不阻断其余 */ } }
+                    };
+                    if (t1.length > 0) return (
+                      <div className="ml-auto flex items-center gap-1.5">
+                        <button onClick={() => runSerial(t1, rejectM)}
+                          className="text-[11px] text-stone-400 border border-stone-200 rounded-full px-2.5 py-0.5 hover:bg-stone-50">丢弃</button>
+                        <button onClick={() => runSerial(t1, reviewM)} disabled={reviewM.isPending}
+                          className="text-[11px] text-sky-600 border border-sky-300/60 rounded-full px-2.5 py-0.5 hover:bg-sky-50 disabled:opacity-50">复核</button>
+                      </div>
+                    );
+                    if (t2.length > 0) return (
+                      <button onClick={() => runSerial(t2, promoteM)} disabled={promoteM.isPending}
+                        className="ml-auto text-[11px] text-xhs border border-xhs/30 rounded-full px-2.5 py-0.5 hover:bg-xhs-soft disabled:opacity-50">入库建联</button>
+                    );
+                    return <span className="ml-auto text-[11px] text-emerald-600">✓ 已入库</span>;
+                  })()}
                 </div>
                 {g.scheduleNote && <div className="text-[11px] text-stone-500 mb-2 bg-stone-50 rounded-lg px-2.5 py-1.5" title={g.scheduleNote}>📅 {g.scheduleNote}</div>}
                 <div className="flex gap-1.5 overflow-x-auto pb-1">
