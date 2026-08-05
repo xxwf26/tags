@@ -9,7 +9,7 @@ const limit = Number(process.argv[3]) || 15;
 if (!keyword) { console.log(JSON.stringify({ images: [] })); process.exit(0); }
 
 const UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1';
-const items: { url: string; noteId?: string; title?: string; sourceUrl?: string; author?: string }[] = [];
+const items: { url: string; noteId?: string; title?: string; sourceUrl?: string; author?: string; uid?: string }[] = [];
 
 const browser = await chromium.launch({ headless: true });
 const ctx = await browser.newContext({ userAgent: UA });
@@ -30,11 +30,12 @@ try {
       const mb = c.mblog;
       if (!mb?.pics?.length) continue;
       const author = mb.user?.screen_name || undefined;
+      const uid = mb.user?.id != null ? String(mb.user.id) : undefined;
       for (const pic of mb.pics) {
         const url = pic.large?.url || pic.url;
         if (url && !items.find(x => x.url === url)) {
           items.push({
-            url, noteId: mb.id, author,
+            url, noteId: mb.id, author, uid,
             // 微博原帖页（可点回溯来源），而非图片直链
             sourceUrl: mb.id ? `https://m.weibo.cn/status/${mb.id}` : undefined,
             title: String(mb.text || '').replace(/<[^>]+>/g, '').slice(0, 60),

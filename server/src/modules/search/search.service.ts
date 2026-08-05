@@ -6,6 +6,7 @@ import { basename, join } from 'node:path';
 import { db, schema } from '../../database/db.js';
 import { eq, and, desc, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { searchXhsByKeyword, downloadImage, buildProfileUrl, fetchProfileNotes } from '../crawl/xhs.js';
+import { searchWeiboByKeyword, fetchWeiboImages } from '../crawl/weibo.js';
 import { fetchMihuashiArtworkAuthor, extractMihuashiArtworkId, searchMihuashiArtists } from '../crawl/mihuashi.js';
 import { aHash, hexToNibbles, hammingNib, DEDUP_THRESHOLD } from '../imghash/imghash.js';
 import { logOperation } from '../operation/op.js';
@@ -23,6 +24,8 @@ const ARTIST_CONCURRENCY = 6;   // 并发爬主页数（判画师号已换更快
 const COVERS_TO_JUDGE = 6;      // 每个作者取主页前 N 张封面给 AI 判是不是画师号
 const WORKS_PER_ARTIST = 6;     // 判定为画师后，存其主页前 N 张作品作为代表作
 const XHS_RECALL = 300;         // 每个关键词召回帖数（用于聚合作者，非逐张处理）
+const WEIBO_RECALL = 40;        // 微博每关键词召回配图数（用于聚合作者）
+const WEIBO_CONCURRENCY = 2;    // 微博主页反查并发（fetchWeiboImages 共享单例浏览器 + m.weibo.cn 易限流，压低）
 // 约稿身份词：发这些词的基本是画师本人（或想找画师的甲方，会被"判画师号"兜底剔除）。
 // 用来最大范围捞画师——画风词捞"内容"，约稿词捞"画师身份"，互补。
 const COMMISSION_KEYWORDS = ['约稿', '画师约稿', '接稿', '商稿', '原画师', '插画约稿', 'lof画手', '画手', '稿件'];
@@ -158,19 +161,23 @@ export class SearchService {
       .from(schema.searchResults).where(eq(schema.searchResults.sessionId, sessionId));
     const seenAuthorIds = new Set<string>();
     const profileIdRe = /user\/profile\/([0-9a-zA-Z]+)/;
+    const weiboUidRe = /weibo\.com\/u\/(\d+)/;   // 继续搜索：已处理过的微博作者也跳过
     for (const r of existingInSession) {
       if (r.hash) sessionNibs.push(hexToNibbles(r.hash));
       if (r.sourceUrl) prevUrls.add(r.sourceUrl);
       const m = r.authorUrl?.match(profileIdRe);
       if (m) seenAuthorIds.add(m[1]);
+      const wm = r.authorUrl?.match(weiboUidRe);
+      if (wm) seenAuthorIds.add(wm[1]);
     }
+    // 作品图文件名序号（continue 时从已有数接续，避免覆盖）——函数级，小红书/微博两条链路共用递增
+    let fileSeq = existingInSession.length;
 
     let totalResults = existingInSession.length, newResults = 0, keptArtists = 0;
     // 聚合作者总数 / 因超 ARTIST_CAP 未反查的作者数（透出到前端，让用户知道还有多少候选没查，可点"继续搜索"）
     let aggAuthors = 0, droppedByCap = 0;
 
-    // 微博：新流程（作者主页反查画师）不支持，若选了给出提示
-    if (platforms.includes('weibo')) console.log('[search] 微博暂不支持"作者中心找画师"流程，已跳过');
+    // 平台执行：小红书（下方 else 块）与微博（xhs 块之后）各走一条「作者中心」链路，可同时选。
     if (!platforms.includes('xiaohongshu')) {
       console.log('[search] 未选择小红书，无可执行平台');
     } else if (!xhsCookie) {
@@ -221,7 +228,6 @@ export class SearchService {
       console.log(`[search] 聚合得 ${allAuthors.length} 个作者（无id丢 ${dropNoId}，路人词丢 ${dropText}），反查前 ${authors.length} 个（其中约稿词 ${commissionCount}）${droppedByCap ? `（超上限丢 ${droppedByCap}）` : ''}`);
       await db.update(schema.searchSessions).set({ searchTags: buildTags({ stage: 'judge', total: progressTotal, processed: 0, aggAuthors, droppedByCap, startTime: new Date(progressStart).toISOString() }) }).where(eq(schema.searchSessions.id, sessionId));
 
-      let fileSeq = totalResults; // 作品图文件名序号（continue 时从已有数接续，避免覆盖）
       let dropNotArtist = 0, profileFail = 0, skipNoCover = 0;
 
       // ── D. 并发(3)反查每个作者主页，判是不是画师号 ──
@@ -324,6 +330,100 @@ export class SearchService {
         console.log(`[search] 进度: ${progressProcessed}/${progressTotal} 作者，画师 ${keptArtists}（路人 ${dropNotArtist}，主页失败 ${profileFail}，无封面 ${skipNoCover}）`);
       }
       console.log(`[search] 小红书完成: 画师 ${keptArtists} 人 / ${totalResults} 作品（路人 ${dropNotArtist}，主页失败 ${profileFail}，无封面 ${skipNoCover}）`);
+    }
+
+    // ── 微博：作者中心（同小红书思路；无约稿广撒网、无联系方式抽取）。可与小红书同时选。──
+    if (platforms.includes('weibo') && !isAborted()) {
+      const wbKws = (searchKeywords.length ? searchKeywords : ['插画']);
+      type WAgg = { uid: string; nickname: string; hitCount: number; kw: string };
+      const wbMap = new Map<string, WAgg>();
+      let wbNoId = 0, wbDropText = 0;
+      const wbKwTotal = wbKws.length; let wbKwDone = 0;
+      await db.update(schema.searchSessions).set({ searchTags: buildTags({ stage: 'recall', kwDone: wbKwDone, kwTotal: wbKwTotal, authorsFound: 0, startTime: new Date(progressStart).toISOString() }) }).where(eq(schema.searchSessions.id, sessionId));
+      for (const kw of wbKws) {
+        if (isAborted()) break;
+        const imgs = await searchWeiboByKeyword(kw, WEIBO_RECALL);
+        console.log(`[search] 微博 "${kw}": ${imgs.length} 图，聚合作者中...`);
+        for (const im of imgs) {
+          const uid = im.uid;
+          if (!uid) { wbNoId++; continue; }
+          if (seenAuthorIds.has(uid)) continue;
+          const g = wbMap.get(uid);
+          if (g) { g.hitCount++; continue; }
+          const txt = (im.author || '') + ' ' + (im.title || '');
+          if (NON_ART_TEXT.some(w => txt.includes(w))) { wbDropText++; continue; }
+          wbMap.set(uid, { uid, nickname: im.author || '', hitCount: 1, kw });
+        }
+        wbKwDone++;
+        await db.update(schema.searchSessions).set({ searchTags: buildTags({ stage: 'recall', kwDone: wbKwDone, kwTotal: wbKwTotal, authorsFound: wbMap.size, startTime: new Date(progressStart).toISOString() }) }).where(eq(schema.searchSessions.id, sessionId));
+      }
+
+      const wbAll = [...wbMap.values()].sort((a, b) => b.hitCount - a.hitCount);
+      const wbAuthors = wbAll.slice(0, ARTIST_CAP);
+      aggAuthors += wbAll.length;
+      droppedByCap += wbAll.length - wbAuthors.length;
+      progressTotal += wbAuthors.length;
+      console.log(`[search] 微博聚合 ${wbAll.length} 作者（无id ${wbNoId}，路人词 ${wbDropText}），反查前 ${wbAuthors.length}`);
+      await db.update(schema.searchSessions).set({ searchTags: buildTags({ stage: 'judge', total: progressTotal, processed: progressProcessed, artists: keptArtists, aggAuthors, droppedByCap, startTime: new Date(progressStart).toISOString() }) }).where(eq(schema.searchSessions.id, sessionId));
+
+      let wbDropNotArtist = 0, wbProfileFail = 0, wbSkipNoCover = 0;
+      const wbUploadsDir = join(process.cwd(), 'uploads');
+      const processWbAuthor = async (a: WAgg) => {
+        if (isAborted()) return;
+        progressProcessed++;
+        let profile: { nickname: string; items: any[] };
+        try { profile = await fetchWeiboImages(a.uid, WORKS_PER_ARTIST + 2, 4); }
+        catch (e: any) { wbProfileFail++; console.error(`[search] 微博主页失败 ${a.nickname}: ${e.message}`); return; }
+        const items = (profile.items || []).filter(it => it.url);
+        if (!items.length) { wbSkipNoCover++; return; }
+        const authorUrl = `https://weibo.com/u/${a.uid}`;
+        // 下载前 N 张封面判是不是画师号
+        const coverN = Math.min(COVERS_TO_JUDGE, items.length);
+        const coverBufs: (Buffer | null)[] = new Array(coverN).fill(null);
+        for (let i = 0; i < coverN; i++) { try { coverBufs[i] = (await downloadImage(items[i].url)).buf; } catch {} }
+        const judgeIdx: number[] = []; const judgeCovers: { b64: string; mime: string }[] = [];
+        coverBufs.forEach((b, i) => { if (b) { judgeCovers.push({ b64: b.toString('base64'), mime: 'image/jpeg' }); judgeIdx.push(i); } });
+        if (!judgeCovers.length) { wbSkipNoCover++; return; }
+        const judge = await judgeArtistAccount(judgeCovers);
+        if (!judge.isArtist) { wbDropNotArtist++; console.log(`[search] 丢弃路人(微博) ${profile.nickname || a.nickname}: ${judge.reason}`); return; }
+        // 微博主页接口不带简介，无微信/QQ 可抽；档期也没有。只存画风判定，contact 留空。
+        const meta = { isArtist: true, artRatio: judge.artRatio, style: judge.style, reason: judge.reason, bio: '', redId: '', contact: null, commission: 'unknown', scheduleNote: null };
+        const qualityOf = (itemIdx: number): number | null => { const j = judgeIdx.indexOf(itemIdx); return j >= 0 ? (judge.qualities[j] ?? null) : null; };
+        const nickname = profile.nickname || a.nickname || null;
+        let savedForThis = 0; const localUrls: string[] = []; const rowIds: number[] = [];
+        const storeN = Math.min(WORKS_PER_ARTIST, items.length);
+        for (let i = 0; i < storeN; i++) {
+          if (isAborted()) break;
+          try {
+            const buf = coverBufs[i] ?? (await downloadImage(items[i].url)).buf;
+            let imageHash: string | null = null; try { imageHash = await aHash(buf); } catch {}
+            if (imageHash) { const nib = hexToNibbles(imageHash); if (isDup(nib)) continue; sessionNibs.push(nib); }
+            await mkdir(wbUploadsDir, { recursive: true });
+            const filename = `search-${sessionId}-${++fileSeq}.jpg`;
+            await writeFile(join(wbUploadsDir, filename), buf);
+            const localUrl = `/uploads/${filename}`;
+            const isNew = !(imageHash && prevHashes.has(imageHash));
+            const [ins] = await db.insert(schema.searchResults).values({
+              sessionId, referenceImageId: body.referenceId, platform: 'weibo',
+              sourceUrl: items[i].sourceUrl || items[i].url, imageUrl: localUrl, allImages: [localUrl],
+              aiTags: [meta] as any, imageHash: imageHash || null, similarity: null, quality: qualityOf(i),
+              title: items[i].title || nickname, author: nickname, authorUrl, tags: [a.kw], isNew: isNew ? 1 : 0, tier: 'tier1',
+            });
+            localUrls.push(localUrl); rowIds.push((ins as any).insertId);
+            totalResults++; savedForThis++; if (isNew) newResults++;
+          } catch (e: any) { console.error(`[search] 存微博作品失败: ${e.message}`); }
+        }
+        if (rowIds.length) await db.update(schema.searchResults).set({ allImages: localUrls }).where(inArray(schema.searchResults.id, rowIds));
+        if (savedForThis) keptArtists++;
+        await new Promise(r => setTimeout(r, 300));
+      };
+      for (let i = 0; i < wbAuthors.length; i += WEIBO_CONCURRENCY) {
+        if (isAborted()) break;
+        await Promise.all(wbAuthors.slice(i, i + WEIBO_CONCURRENCY).map(processWbAuthor));
+        await db.update(schema.searchSessions).set({ resultCount: totalResults, newCount: newResults, searchTags: buildTags({ stage: 'judge', total: progressTotal, processed: progressProcessed, artists: keptArtists, aggAuthors, droppedByCap, startTime: new Date(progressStart).toISOString() }) }).where(eq(schema.searchSessions.id, sessionId));
+        console.log(`[search] 微博进度: ${progressProcessed}/${progressTotal}，画师 ${keptArtists}（路人 ${wbDropNotArtist}，主页失败 ${wbProfileFail}，无封面 ${wbSkipNoCover}）`);
+      }
+      console.log(`[search] 微博完成: 画师 ${keptArtists} 人 / ${totalResults} 作品（路人 ${wbDropNotArtist}，主页失败 ${wbProfileFail}，无封面 ${wbSkipNoCover}）`);
     }
 
     // 最终更新：包含进度信息（前端算百分比/ETA用）+ 画师数写入 progress 供前端展示

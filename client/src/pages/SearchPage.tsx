@@ -186,13 +186,13 @@ export function SearchPage() {
   };
   const selectedIds = Object.keys(tagModes).map(Number);
   const togglePlatform = (k: string) => setPlatforms(s => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); if (!n.size) n.add(k); return n; });
-  const PLATFORM_OPTS = [{ key: 'xiaohongshu', label: '小红书' }];
+  const PLATFORM_OPTS = [{ key: 'xiaohongshu', label: '小红书' }, { key: 'weibo', label: '微博' }];
   const saveTags = () => { if (selectedRef) updateTags.mutate({ id: selectedRef, manualTags: selectedIds.map(id => { const t = (ref?.aiTags ?? []).find(a => a.tagId === id); return { tagId: id, label: t?.label ?? '', dimensionId: t?.dimensionId ?? null }; }) }); };
 
   const doSearch = async () => {
-    // cookie 预检：失效/缺登录态直接提示，不白跑（item 5）
+    // cookie 预检：失效/缺登录态直接提示，不白跑（item 5）。仅选了小红书时才校验（微博免登录）。
     const cs = cookieCheck?.status;
-    if (cs === 'missing' || cs === 'no_session' || cs === 'expired') {
+    if (platforms.has('xiaohongshu') && (cs === 'missing' || cs === 'no_session' || cs === 'expired')) {
       alert(cs === 'missing' ? '小红书 cookie 未设置，请先在上方粘贴或扫码登录。' : cs === 'expired' ? '小红书 cookie 已失效，请重新获取（F12 → Network → Cookie）或扫码登录。' : 'cookie 缺少 web_session 登录态，请重新粘贴完整 cookie 或扫码登录。');
       return;
     }
